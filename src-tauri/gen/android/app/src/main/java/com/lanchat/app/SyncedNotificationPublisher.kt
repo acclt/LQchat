@@ -24,6 +24,7 @@ object SyncedNotificationPublisher {
     const val EXTRA_NOTIFICATION_KEY = "com.lanchat.app.extra.NOTIFICATION_KEY"
     private data class Key(val source: String, val pkg: String, val key: String)
     private data class Content(val app: String, val title: String, val text: String, val icon: String)
+    internal data class Presentation(val title: String, val sourceLabel: String, val systemTitle: String)
     private val recent = LinkedHashMap<Key, Content>(512, 0.75f, true)
     @Synchronized fun clear() { recent.clear() }
 
@@ -51,18 +52,19 @@ object SyncedNotificationPublisher {
                 val open = PendingIntent.getActivity(context, requestCode, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
                 val bitmap = NotificationAppIcon.decode(content.icon)
                 val source = payload.optString("source_name", key.source)
+                val presentation = presentation(n, content, source)
                 val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(n.optLong("post_time")))
                 fun layout(resource: Int) = RemoteViews(context.packageName, resource).apply {
                     if (bitmap != null) setImageViewBitmap(R.id.sync_icon, bitmap)
                     else setImageViewResource(R.id.sync_icon, R.mipmap.ic_launcher)
                     setTextViewText(R.id.sync_app, content.app)
-                    setTextViewText(R.id.sync_title, content.title.ifBlank { content.app })
+                    setTextViewText(R.id.sync_title, presentation.title)
                     setTextViewText(R.id.sync_text, content.text)
-                    setTextViewText(R.id.sync_source, "来自 $source")
+                    setTextViewText(R.id.sync_source, presentation.sourceLabel)
                     setTextViewText(R.id.sync_time, time)
                 }
                 val notification = NotificationCompat.Builder(context, CHANNEL).setSmallIcon(R.mipmap.ic_launcher)
-                    .setContentTitle("${content.app} · ${content.title}")
+                    .setContentTitle(presentation.systemTitle)
                     .setContentText(content.text)
                     .setStyle(NotificationCompat.DecoratedCustomViewStyle())
                     .setCustomContentView(layout(R.layout.notification_sync_compact))
@@ -80,6 +82,30 @@ object SyncedNotificationPublisher {
         }.onFailure { failureReason = it.message ?: "receive_rejected" }.getOrDefault(false)
         if (LanChatForegroundService.notificationSessionReady()) NotificationSyncNative.complete(request, success, changed, failureReason)
     }
+
+    private fun presentation(notification: JSONObject, content: Content, source: String): Presentation {
+        val isBattery = notification.optString("package") == "com.lanchat.app" &&
+            notification.optString("notification_key").startsWith("lq-battery-") &&
+            content.title == "电量提醒"
+        if (isBattery) {
+            val title = "${source.ifBlank { notification.optString("source_device_id") }} · 电量"
+            return Presentation(title, "", title)
+        }
+        val title = content.title.ifBlank { content.app }
+        return Presentation(title, "来自 $source", "${content.app} · ${content.title}")
+    }
+
+    internal fun presentationForTest(notification: JSONObject, source: String): Presentation =
+        presentation(
+            notification,
+            Content(
+                notification.optString("app_name"),
+                notification.optString("title"),
+                notification.optString("text"),
+                notification.optString("app_icon"),
+            ),
+            source,
+        )
 
     internal fun launchIntent(context: Context, payload: JSONObject, notification: JSONObject): Intent =
         Intent(context, MainActivity::class.java)

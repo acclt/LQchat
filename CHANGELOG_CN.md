@@ -2,6 +2,23 @@
 
 本日志只收录能够通过代码提交、正式安装包或构建记录核实的版本。时间均为北京时间（Asia/Shanghai）。
 
+## 2026-09-08 15:56:29 — 6.5（Android versionCode 1065）
+
+### 修复内容
+
+- 调整 Android 接收端的远程电量通知显示：由设备 `IQOO` 发来的 50% 电量提醒显示为“`IQOO · 电量` / `50%`”，设备名称按实际发送端名称替换。
+- 只转换来自 LQChat、且通知标识以 `lq-battery-` 开头的电量提醒；接收端自身的“电量提醒”以及其他远程应用通知保持原样。
+- 去除远程电量通知中重复的“来自设备”文字，设备名称只保留在主标题中。
+
+### 构建验证
+
+- Android 正式 APK：`LQChat-v6.5-android-arm64.apk`
+- Android 包名：`com.lanchat.app`；版本：`6.5`（versionCode 1065）；架构：`arm64-v8a`。
+- APK v2/v3 签名验证通过，签名与 6.4 一致，可以覆盖升级。
+- APK SHA-256：`D5B78328FEAE6D4BEFD5E69821D7E41213CF0D70EF006314B91279DAA83F2544`
+- Windows 正式安装程序：`LQChat-v6.5-windows-x64.exe`；产品版本：`6.5.0`；内置主程序架构：x64。
+- EXE SHA-256：`250B6E825CB3693EDA4BCDD81CD2AEA95EB2CBA51A3DFC021D8F9A365C4FC664`
+
 ## 2026-09-08 14:46:29 — Android 6.4（versionCode 1064）
 
 ### 新增内容

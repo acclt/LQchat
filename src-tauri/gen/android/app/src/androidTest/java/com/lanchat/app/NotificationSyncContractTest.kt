@@ -17,6 +17,34 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class NotificationSyncContractTest {
+    @Test fun remoteBatteryNotificationUsesSourceDeviceInTitleOnly() {
+        val notification = JSONObject()
+            .put("source_device_id", "iqoo-id")
+            .put("package", "com.lanchat.app")
+            .put("app_name", "LQChat")
+            .put("title", "电量提醒")
+            .put("text", "50%")
+            .put("notification_key", "lq-battery-50-123-0")
+        val presentation = SyncedNotificationPublisher.presentationForTest(notification, "IQOO")
+        assertEquals("IQOO · 电量", presentation.title)
+        assertEquals("", presentation.sourceLabel)
+        assertEquals("IQOO · 电量", presentation.systemTitle)
+    }
+
+    @Test fun ordinaryRemoteNotificationPresentationIsUnchanged() {
+        val notification = JSONObject()
+            .put("source_device_id", "iqoo-id")
+            .put("package", "example.messages")
+            .put("app_name", "短信")
+            .put("title", "验证码")
+            .put("text", "123456")
+            .put("notification_key", "message-1")
+        val presentation = SyncedNotificationPublisher.presentationForTest(notification, "IQOO")
+        assertEquals("验证码", presentation.title)
+        assertEquals("来自 IQOO", presentation.sourceLabel)
+        assertEquals("短信 · 验证码", presentation.systemTitle)
+    }
+
     @Test fun syncedNotificationLaunchUsesExplicitImmutableMetadata() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val notification = JSONObject().put("source_device_id", "phone-a")
