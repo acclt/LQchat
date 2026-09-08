@@ -7,7 +7,7 @@ const fixtureIcon = fs.readFileSync(path.resolve(__dirname, "../src-tauri/icons/
 const fixture = `(() => {
   const android = new URLSearchParams(location.search).has('android-preview');
   const peers = [{id:'iqoo',name:'IQOO',addr:'192.168.5.10:8888',is_offline:false,notification_push_enabled:true,notification_push_target_device_ids:['preview-local']},{id:'redm',name:'REDM',addr:'192.168.5.11:8888',is_offline:false,notification_push_enabled:true,notification_push_target_device_ids:['other-device']},{id:'4060',name:'4060',addr:'192.168.5.4:8888',is_offline:true,notification_push_enabled:false,notification_push_target_device_ids:[]}];
-  let settings = {push_enabled:false,receive_enabled:true,allowed_packages:[],target_device_ids:[]};
+  let settings = {push_enabled:false,receive_enabled:true,lq_battery_push_enabled:false,allowed_packages:[],target_device_ids:[]};
   const listeners = new Map();
   const records = [{peer_id:'iqoo',peer_name:'IQOO',view_kind:'notification_receive',status:'success',notification:{msg_type:'notification',event_id:'preview-event',source_device_id:'iqoo',target_device_id:'preview-local',package:'example.messages',app_name:'短信',title:'快递到达提醒',text:'您的包裹已到达驿站。此内容是本地界面测试数据，不是真实系统通知。',notification_key:'preview-key',post_time:Date.now()}}];
   records[0].notification.app_icon='${fixtureIcon}';

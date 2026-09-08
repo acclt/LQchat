@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let phone_test = std::env::args().any(|a| a == "--phone-test");
         let android_shell_test = std::env::args().any(|a| a == "--android-shell-test");
         if xml.contains("v4 合成测试通知")
-            || (phone_test && xml.contains("通知推送测试") && xml.contains("LQ Chat 测试"))
+            || (phone_test && xml.contains("通知推送测试") && xml.contains("LQChat 测试"))
             || (android_shell_test && xml.contains("LQ QA ") && xml.contains("Shell"))
         {
             let images = doc.GetElementsByTagName(&HSTRING::from("image"))?;
@@ -40,7 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     local_icons += 1;
                 }
             }
-            found.push(serde_json::json!({"tag":entry.Tag()?.to_string(),"group":entry.Group()?.to_string(),"updated":xml.contains("第二次更新"),"local_icons":local_icons,"application_name":xml.contains("图标合成测试") || xml.contains("验收示例应用") || xml.contains("LQ Chat 测试") || (android_shell_test && xml.contains("Shell")),"android_shell_fixture":xml.contains("LQ QA ") && xml.contains("Shell"),"offline_fixture":xml.contains("LQ QA OFFLINE"),"stopped_fixture":xml.contains("LQ QA STOPPED"),"columns":xml.contains("subgroup")}));
+            found.push(serde_json::json!({"tag":entry.Tag()?.to_string(),"group":entry.Group()?.to_string(),"updated":xml.contains("第二次更新"),"local_icons":local_icons,"application_name":xml.contains("图标合成测试") || xml.contains("验收示例应用") || xml.contains("LQChat 测试") || (android_shell_test && xml.contains("Shell")),"android_shell_fixture":xml.contains("LQ QA ") && xml.contains("Shell"),"offline_fixture":xml.contains("LQ QA OFFLINE"),"stopped_fixture":xml.contains("LQ QA STOPPED"),"columns":xml.contains("subgroup")}));
             if std::env::args().any(|a| a == "--remove-synthetic") {
                 history.RemoveGroupedTagWithId(&entry.Tag()?, &entry.Group()?, &app_id)?;
             }

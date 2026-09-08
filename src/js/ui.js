@@ -795,7 +795,7 @@ function updateListHighlight(activeId) {
 // 5. 全局监听器:处理物理返回键和手动后退
 window.addEventListener("popstate", function (event) {
   if (document.body.classList.contains("android-app") &&
-      ["#settings", "#permissions", "#push-apps"].includes(location.hash)) return;
+      ["#settings", "#permissions", "#push-apps", "#lq-push"].includes(location.hash)) return;
   const chatContainer = document.getElementById("chat-container");
 
   const attachmentPanel = document.getElementById("android-attachment-panel");
@@ -2634,6 +2634,7 @@ function initSettings() {
   const backgroundKeepRunningToggle = document.getElementById("background-keep-running-toggle");
   const backgroundStartOnBootToggle = document.getElementById("background-start-on-boot-toggle");
   const backgroundExcludeRecentsToggle = document.getElementById("background-exclude-recents-toggle");
+  const batteryAlertToggle = document.getElementById("battery-alert-toggle");
 
   // Android 端隐藏数据库路径配置
   const isAndroid = !!window.__TAURI__ &&
@@ -2678,7 +2679,7 @@ function initSettings() {
   };
   if (isAndroid) {
     window.addEventListener("popstate", () => {
-      const inSettings = ["#settings", "#permissions", "#push-apps"].includes(location.hash);
+      const inSettings = ["#settings", "#permissions", "#push-apps", "#lq-push"].includes(location.hash);
       settingsPanel.style.display = inSettings ? "block" : "none";
       permissionsPanel?.classList.toggle("is-open", location.hash === "#permissions");
       if (!inSettings) clearSettingsFeedback();
@@ -2778,7 +2779,7 @@ function initSettings() {
       window.__TAURI__.core.invoke("open_battery_optimization_settings"));
     backgroundReceiveStatus?.addEventListener("click", async () => {
       if (stoppingBackground || backgroundReceiveStatus.disabled ||
-          !confirm("停止后台接收并退出 LQ Chat？")) return;
+          !confirm("停止后台接收并退出 LQChat？")) return;
       stoppingBackground = true;
       backgroundReceiveStatus.disabled = true;
       try {
@@ -2860,11 +2861,12 @@ function initSettings() {
             backgroundKeepRunningToggle.checked = !!background.keep_running;
             backgroundStartOnBootToggle.checked = !!background.start_on_boot;
             backgroundExcludeRecentsToggle.checked = !!background.exclude_from_recents;
+            batteryAlertToggle.checked = !!background.battery_alert_enabled;
           }
           initialNotifications = await window.__TAURI__.core.invoke("get_notifications_enabled").catch(() => true);
           notificationToggle.checked = initialNotifications;
           if (isAndroid && typeof Notification !== "undefined" && Notification.permission === "denied") {
-            notificationHint.textContent = "系统通知权限已关闭，请在系统设置中允许 LQ Chat 通知。";
+            notificationHint.textContent = "系统通知权限已关闭，请在系统设置中允许 LQChat 通知。";
           } else {
             notificationHint.textContent = "";
           }
@@ -3014,6 +3016,7 @@ function initSettings() {
       const myDbPath = dbPathInput.value.trim() || "";
       const autoDl = autoDownloadToggle.checked;
       const notificationsEnabled = notificationToggle.checked;
+      const batteryAlertEnabled = isAndroid && batteryAlertToggle.checked;
       const closeToTray = isWindowsDesktop ? closeToTrayToggle.checked : undefined;
       const autostartEnabled = isWindowsDesktop ? autostartToggle.checked : false;
       const nameChanged = isAndroid && deviceName !== initialName;
@@ -3021,13 +3024,14 @@ function initSettings() {
         keep_running: backgroundKeepRunningToggle.checked,
         start_on_boot: backgroundStartOnBootToggle.checked,
         exclude_from_recents: backgroundExcludeRecentsToggle.checked,
+        battery_alert_enabled: batteryAlertEnabled,
       } : null;
 
       // Permission timeouts must not leave a partially written configuration.
-      if (notificationsEnabled && isAndroid) {
+      if ((notificationsEnabled || batteryAlertEnabled) && isAndroid) {
         const permission = await requestAndroidNotificationPermission();
         if (permission !== "granted") {
-          throw new Error("系统通知权限未获允许，请授权后重试；或关闭通知开关后保存");
+          throw new Error("系统通知权限未获允许，请授权后重试；或关闭通知和手机电量提示后保存");
         }
       }
 
@@ -3292,7 +3296,7 @@ const i18n = {
     choose: "选择",
     auto_download_label: "自动下载:",
     close_to_tray_label: "点击 X 时最小化到托盘:",
-    autostart_label: "开机自动启动 LQ Chat:",
+    autostart_label: "开机自动启动 LQChat:",
     autostart_hint: "自动启动时隐藏到托盘",
     settings_save_restart: "✓ 设置保存成功，需重启生效",
     settings_saved: "✓ 设置保存成功",
@@ -3338,7 +3342,7 @@ const i18n = {
     choose: "Choose",
     auto_download_label: "Auto Download:",
     close_to_tray_label: "Minimize to tray when clicking X:",
-    autostart_label: "Start LQ Chat when Windows starts:",
+    autostart_label: "Start LQChat when Windows starts:",
     autostart_hint: "Starts hidden in the system tray",
     settings_save_restart: "✓ Saved, restart to apply",
     settings_saved: "✓ Saved",

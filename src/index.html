@@ -7,7 +7,7 @@
         <link rel="stylesheet" href="css/notification-sync.css">
         <link rel="stylesheet" href="css/android-ui.css">
         <link rel="stylesheet" href="css/desktop-ui.css" id="desktop-ui-stylesheet">
-        <title>LQ Chat</title>
+        <title>LQChat</title>
     </head>
     <body>
         <div id="edit-name-panel" class="edit-panel" style="display: none;">
@@ -116,6 +116,10 @@
                             <div id="notification-permission-hint" class="setting-hint"></div>
                         </div>
                         <div class="setting-item android-permission-row android-only">
+                            <span class="android-permission-copy"><strong>手机电量提示</strong></span>
+                            <label class="toggle-switch"><input type="checkbox" id="battery-alert-toggle"><span class="toggle-slider"></span></label>
+                        </div>
+                        <div class="setting-item android-permission-row android-only">
                             <span class="android-permission-copy"><strong>允许接收其他设备推送</strong></span>
                             <label class="toggle-switch"><input type="checkbox" id="android-receive-toggle"><span class="toggle-slider"></span></label>
                         </div>
@@ -156,7 +160,7 @@
                 </div>
                 <div class="setting-item" id="autostart-setting">
                     <div class="setting-label-row">
-                        <label for="autostart-toggle" data-i18n="autostart_label">开机自动启动 LQ Chat:</label>
+                        <label for="autostart-toggle" data-i18n="autostart_label">开机自动启动 LQChat:</label>
                         <label class="toggle-switch">
                             <input type="checkbox" id="autostart-toggle">
                             <span class="toggle-slider"></span>
@@ -224,6 +228,21 @@
             <div class="android-save-bar">
                 <p id="android-push-apps-status" class="android-subpage-status" role="status"></p>
                 <button id="android-push-apps-save-btn" class="android-primary-action" type="button">保存选择</button>
+            </div>
+        </section>
+        <section id="android-lq-push-panel" class="android-overlay-panel android-only" aria-label="lq推送管理">
+            <header class="android-page-bar android-only">
+                <button id="android-lq-push-back-btn" class="android-back-btn" type="button" aria-label="返回设置">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+                </button>
+                <h3>lq推送管理</h3>
+                <span></span>
+            </header>
+            <div class="settings-content">
+                <section class="android-lq-push-card">
+                    <div class="ns-settings-content"></div>
+                    <p class="ns-save-status" role="status"></p>
+                </section>
             </div>
         </section>
         <section id="android-push-sources-panel" class="settings-panel android-push-sources-panel" style="display: none;" aria-label="正在向本机推送">
@@ -395,7 +414,7 @@
                 </div>
             </div>
             <div class="header">
-                <div class="desktop-only desktop-brand"><span class="desktop-brand-mark" aria-hidden="true">L</span><span>LQ Chat<small>局域网互联</small></span></div>
+                <div class="desktop-only desktop-brand"><span class="desktop-brand-mark" aria-hidden="true">L</span><span>LQChat<small>局域网互联</small></span></div>
                 <h1 id="my-name" tabindex="0" role="button" title="修改设备名称">正在加载...</h1>
                 <div class="header-buttons">
                     <button id="add-peer-btn">添加</button>

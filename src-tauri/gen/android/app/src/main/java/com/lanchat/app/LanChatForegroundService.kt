@@ -18,6 +18,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import androidx.annotation.Keep
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -42,6 +43,7 @@ class LanChatForegroundService : Service() {
         private const val SESSION_TOKEN = "token"
         @Volatile private var nativeReadyInProcess = false
         @Volatile private var notificationSessionActive = false
+        @Volatile private var activeInstance: LanChatForegroundService? = null
         fun notificationSessionReady(): Boolean = nativeReadyInProcess && notificationSessionActive
         private const val TAG = "LanChatService"
         private const val SERVICE_CHANNEL = "lanchat_background_service"
@@ -53,6 +55,13 @@ class LanChatForegroundService : Service() {
         private const val TRANSFER_WAKE_TIMEOUT_MS = 120_000L
         private const val STOP_CALL_TIMEOUT_MS = 15_000L
         private const val FORCE_STOP_CALL_TIMEOUT_MS = 6_000L
+        internal const val HEALTH_CHECK_INTERVAL_MS = 15_000L
+        private const val UNHEALTHY_CHECKS_BEFORE_RESTART = 2
+        private const val FIRST_SELF_HEAL_DELAY_MS = 30_000L
+        private const val MAX_SELF_HEAL_DELAY_MS = 5 * 60_000L
+        private const val STARTUP_RECOVERY_DELAY_MS = 10_000L
+        private const val STARTUP_RECOVERY_RETRY_MS = 30_000L
+        private const val MAX_STARTUP_RECOVERY_ATTEMPTS = 3
 
         fun startVisibleUserSession(context: Context) {
             nativeReadyInProcess = true
@@ -95,6 +104,15 @@ class LanChatForegroundService : Service() {
             })
         }
 
+        fun refreshBatteryAlerts() {
+            val service = activeInstance ?: return
+            service.mainHandler.post {
+                if (!service.exiting.get() && service::batteryAlertController.isInitialized) {
+                    service.batteryAlertController.refresh()
+                }
+            }
+        }
+
         internal fun persistSession(context: Context, token: String): Boolean =
             context.getSharedPreferences(SESSION_PREFS, Context.MODE_PRIVATE).edit()
                 .putBoolean(SESSION_ACTIVE, true).putString(SESSION_TOKEN, token).commit()
@@ -112,6 +130,17 @@ class LanChatForegroundService : Service() {
         internal fun isValidVisibleSessionRequest(context: Context, token: String?, nativeReady: Boolean): Boolean =
             nativeReady && token != null && token == currentSessionToken(context)
 
+        internal fun mayRecoverStickyRestart(context: Context): Boolean =
+            BackgroundRuntimeSettings.mayRecover(context)
+
+        internal fun isUnhealthyCoreState(state: String?): Boolean =
+            state == "ERROR" || state == "STOPPED"
+
+        internal fun selfHealDelayMs(failedAttempts: Int): Long {
+            val shift = failedAttempts.coerceIn(0, 4)
+            return (FIRST_SELF_HEAL_DELAY_MS * (1L shl shift)).coerceAtMost(MAX_SELF_HEAL_DELAY_MS)
+        }
+
         internal fun resetProcessNativeReadyForTest() { nativeReadyInProcess = false }
         internal fun serviceStartMode(): Int = START_STICKY
         internal fun isVerifiedStopResponse(response: JSONObject): Boolean {
@@ -128,6 +157,7 @@ class LanChatForegroundService : Service() {
     private external fun nativeStopCore(): String
     private external fun nativeForceStopCore(): String
     private external fun nativeGetCoreStatus(): String
+    private external fun nativeInitializeAndroidContext(): String
     private external fun nativeRegisterServiceEventSink()
     private external fun nativeUnregisterServiceEventSink(): String
 
@@ -140,30 +170,58 @@ class LanChatForegroundService : Service() {
     private var acceptedSessionToken: String? = null
     private var jniReadyForSession = false
     private var platformSessionInitialized = false
+    private var consecutiveUnhealthyChecks = 0
+    private var selfHealAttempts = 0
+    private var nextSelfHealAtElapsedMs = 0L
+    private var selfHealRestartInFlight = false
+    private var foregroundEstablished = false
+    private var startupRecoveryAttempts = 0
+    private val healthCheckRunnable = Runnable { runHealthCheck() }
+    private val startupRecoveryRunnable = Runnable { verifyStartupRecovery() }
 
     private lateinit var notificationManager: NotificationManager
     private lateinit var connectivityManager: ConnectivityManager
     private lateinit var wifiManager: WifiManager
     private lateinit var powerManager: PowerManager
+    private lateinit var batteryAlertController: BatteryAlertController
     private var multicastLock: WifiManager.MulticastLock? = null
     private var transferWakeLock: PowerManager.WakeLock? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     override fun onCreate() {
         super.onCreate()
+        ServiceRecoveryDiagnostics.record(this, "service_on_create")
         AndroidDownloadStore.initialize(applicationContext)
         notificationManager = getSystemService(NotificationManager::class.java)
         connectivityManager = getSystemService(ConnectivityManager::class.java)
         wifiManager = applicationContext.getSystemService(WifiManager::class.java)
         powerManager = getSystemService(PowerManager::class.java)
         createNotificationChannels()
+        activeInstance = this
+        batteryAlertController = BatteryAlertController(
+            applicationContext,
+            notificationManager,
+            mainHandler,
+        ) { servicePendingIntent() }
+        batteryAlertController.refresh()
+        mainHandler.postDelayed(startupRecoveryRunnable, STARTUP_RECOVERY_DELAY_MS)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
+        ServiceRecoveryDiagnostics.record(
+            this,
+            "service_start_request",
+            intent?.action ?: "sticky-null-intent",
+        )
+        if (intent == null) {
+            acceptRecoverySession(startId, allowStartOnBoot = false)
+            return serviceStartMode()
+        }
+
+        when (intent.action) {
             ACTION_START_SESSION -> acceptVisibleSessionOrStop(intent, startId, retry = false)
             ACTION_RETRY -> acceptVisibleSessionOrStop(intent, startId, retry = true)
-            ACTION_RECOVER -> acceptRecoverySession(intent, startId)
+            ACTION_RECOVER -> acceptRecoverySession(startId, allowStartOnBoot = true)
             ACTION_STOP_SESSION -> {
                 val token = intent.getStringExtra(EXTRA_SESSION_TOKEN)
                 if ((token != null && token == acceptedSessionToken && jniReadyForSession) ||
@@ -173,7 +231,7 @@ class LanChatForegroundService : Service() {
                     rejectUnexpectedStart(startId, "无有效会话的停止请求")
                 }
             }
-            else -> rejectUnexpectedStart(startId, "系统重建未获得后台常驻授权")
+            else -> rejectUnexpectedStart(startId, "未知的 Service 启动请求")
         }
         return serviceStartMode()
     }
@@ -186,13 +244,25 @@ class LanChatForegroundService : Service() {
     }
 
     override fun onDestroy() {
-        if (!BackgroundRuntimeSettings.mayRecover(this)) beginExit()
+        ServiceRecoveryDiagnostics.record(this, "service_on_destroy")
+        val mayRecover = BackgroundRuntimeSettings.mayRecover(this)
+        if (::batteryAlertController.isInitialized) {
+            batteryAlertController.stop(clearState = !mayRecover)
+        }
+        if (activeInstance === this) activeInstance = null
+        mainHandler.removeCallbacks(startupRecoveryRunnable)
+        foregroundEstablished = false
+        stopHealthMonitor()
+        if (!mayRecover) beginExit()
         super.onDestroy()
     }
 
-    private fun acceptRecoverySession(intent: Intent?, startId: Int) {
-        if (!BackgroundRuntimeSettings.mayRecover(this) && !BackgroundRuntimeSettings.mayStartOnBoot(this)) {
-            rejectUnexpectedStart(startId, "后台恢复未开启")
+    private fun acceptRecoverySession(startId: Int, allowStartOnBoot: Boolean) {
+        val mayRecover = mayRecoverStickyRestart(this)
+        val allowed = mayRecover || (allowStartOnBoot && BackgroundRuntimeSettings.mayStartOnBoot(this))
+        if (!allowed) {
+            if (allowStartOnBoot) rejectUnexpectedStart(startId, "后台恢复未开启")
+            else rejectUnauthorizedStickyRestart(startId, "系统重建未获得后台常驻授权")
             return
         }
         runCatching { nativeReadyInProcess = true; System.loadLibrary("lanchat") }
@@ -222,7 +292,27 @@ class LanChatForegroundService : Service() {
         platformSessionInitialized = true
         startInForeground(buildServiceNotification("正在启动后台接收服务"))
         registerWifiObserver()
+        val contextReady = runCatching {
+            val response = JSONObject(nativeInitializeAndroidContext())
+            if (!response.optBoolean("ok")) {
+                android.util.Log.e(
+                    TAG,
+                    "前台服务 Android Context 初始化失败: ${response.optString("error")}",
+                )
+            }
+            response.optBoolean("ok")
+        }.onFailure {
+            android.util.Log.e(TAG, "前台服务 Android Context 初始化异常", it)
+        }.getOrDefault(false)
+        if (!contextReady) {
+            android.util.Log.w(TAG, "文件仍可接收至 staging 目录，但暂时无法导出到所选系统目录")
+            ServiceRecoveryDiagnostics.record(this, "android_context_failed")
+        } else {
+            ServiceRecoveryDiagnostics.record(this, "android_context_ready")
+        }
         nativeRegisterServiceEventSink()
+        ServiceRecoveryDiagnostics.record(this, "event_sink_registered")
+        startHealthMonitor()
     }
 
     private fun rejectUnexpectedStart(startId: Int, reason: String) {
@@ -240,15 +330,137 @@ class LanChatForegroundService : Service() {
         stopSelfResult(startId)
     }
 
-    private fun startCoreAsync(force: Boolean = false) {
-        if (exiting.get() || !jniReadyForSession || acceptedSessionToken == null) return
-        if (!force && !coreStartRequested.compareAndSet(false, true)) return
+    private fun rejectUnauthorizedStickyRestart(startId: Int, reason: String) {
+        android.util.Log.w(TAG, "拒绝未授权的 Sticky 重建：$reason")
+        if (!stopSelfResult(startId)) {
+            android.util.Log.i(TAG, "Sticky 重建停止请求已过期，保留更新的 Service 启动请求")
+        }
+    }
+
+    private fun startCoreAsync(force: Boolean = false, selfHealing: Boolean = false): Boolean {
+        if (exiting.get() || !jniReadyForSession || acceptedSessionToken == null) return false
+        if (!force && !coreStartRequested.compareAndSet(false, true)) return false
         if (force) coreStartRequested.set(true)
+        if (selfHealing) selfHealRestartInFlight = true
         updateServiceNotification("正在启动后台接收服务")
-        worker.execute {
-            val response = runCatching { JSONObject(nativeStartCore(applicationInfo.dataDir)) }
-                .getOrElse { JSONObject().put("ok", false).put("error", it.message ?: "JNI 启动失败") }
-            mainHandler.post { applyCoreResult(response) }
+        val submitted = runCatching {
+            worker.execute {
+                val response = runCatching { JSONObject(nativeStartCore(applicationInfo.dataDir)) }
+                    .getOrElse { JSONObject().put("ok", false).put("error", it.message ?: "JNI 启动失败") }
+                mainHandler.post {
+                    if (selfHealing) selfHealRestartInFlight = false
+                    applyCoreResult(response)
+                }
+            }
+        }.onFailure {
+            if (selfHealing) selfHealRestartInFlight = false
+            android.util.Log.e(TAG, "提交核心启动任务失败", it)
+        }.isSuccess
+        ServiceRecoveryDiagnostics.record(
+            this,
+            if (submitted) "core_start_submitted" else "core_start_submit_failed",
+            "self_healing=$selfHealing",
+        )
+        return submitted
+    }
+
+    private fun verifyStartupRecovery() {
+        if (exiting.get() || !BackgroundRuntimeSettings.mayRecover(this)) return
+        if (foregroundEstablished && platformSessionInitialized) return
+        if (startupRecoveryAttempts >= MAX_STARTUP_RECOVERY_ATTEMPTS) {
+            ServiceRecoveryDiagnostics.record(
+                this,
+                "startup_recovery_exhausted",
+                "foreground=$foregroundEstablished platform=$platformSessionInitialized",
+            )
+            return
+        }
+        startupRecoveryAttempts++
+        ServiceRecoveryDiagnostics.record(
+            this,
+            "startup_recovery_retry",
+            "attempt=$startupRecoveryAttempts foreground=$foregroundEstablished platform=$platformSessionInitialized",
+        )
+        if (!platformSessionInitialized) {
+            runCatching {
+                startRecoverySession(applicationContext, "service-startup-watchdog")
+            }.onFailure {
+                android.util.Log.w(TAG, "重新请求后台服务恢复失败", it)
+            }
+        } else {
+            startInForeground(buildServiceNotification("正在恢复后台接收服务"))
+            startCoreAsync(force = true)
+        }
+        mainHandler.postDelayed(startupRecoveryRunnable, STARTUP_RECOVERY_RETRY_MS)
+    }
+
+    private fun startHealthMonitor() {
+        mainHandler.removeCallbacks(healthCheckRunnable)
+        mainHandler.postDelayed(healthCheckRunnable, HEALTH_CHECK_INTERVAL_MS)
+    }
+
+    private fun stopHealthMonitor() {
+        mainHandler.removeCallbacks(healthCheckRunnable)
+        resetSelfHealingState()
+    }
+
+    private fun resetSelfHealingState() {
+        consecutiveUnhealthyChecks = 0
+        selfHealAttempts = 0
+        nextSelfHealAtElapsedMs = 0L
+        selfHealRestartInFlight = false
+    }
+
+    private fun healthMonitorAllowed(): Boolean =
+        !exiting.get() && platformSessionInitialized && jniReadyForSession &&
+            acceptedSessionToken != null && BackgroundRuntimeSettings.mayRecover(this)
+
+    private fun runHealthCheck() {
+        if (!healthMonitorAllowed()) {
+            stopHealthMonitor()
+            return
+        }
+        runCatching {
+            worker.execute {
+                val state = runCatching {
+                    JSONObject(nativeGetCoreStatus()).optJSONObject("status")?.optString("state")
+                }.onFailure {
+                    android.util.Log.w(TAG, "读取核心健康状态失败", it)
+                }.getOrNull()
+                mainHandler.post { handleHealthCheckResult(state) }
+            }
+        }.onFailure {
+            android.util.Log.w(TAG, "提交核心健康检查失败", it)
+        }
+    }
+
+    private fun handleHealthCheckResult(state: String?) {
+        if (!healthMonitorAllowed()) {
+            stopHealthMonitor()
+            return
+        }
+        when {
+            state == "RUNNING" -> resetSelfHealingState()
+            isUnhealthyCoreState(state) || state == null -> {
+                consecutiveUnhealthyChecks++
+                val now = SystemClock.elapsedRealtime()
+                if (consecutiveUnhealthyChecks >= UNHEALTHY_CHECKS_BEFORE_RESTART &&
+                    !selfHealRestartInFlight && now >= nextSelfHealAtElapsedMs
+                ) {
+                    val delay = selfHealDelayMs(selfHealAttempts)
+                    nextSelfHealAtElapsedMs = now + delay
+                    selfHealAttempts++
+                    android.util.Log.w(
+                        TAG,
+                        "核心连续异常，执行第 $selfHealAttempts 次自愈重启；下次最早等待 ${delay / 1000} 秒",
+                    )
+                    startCoreAsync(force = true, selfHealing = true)
+                }
+            }
+            else -> consecutiveUnhealthyChecks = 0
+        }
+        if (healthMonitorAllowed()) {
+            mainHandler.postDelayed(healthCheckRunnable, HEALTH_CHECK_INTERVAL_MS)
         }
     }
 
@@ -258,16 +470,27 @@ class LanChatForegroundService : Service() {
         if (!notificationSessionActive) SyncedNotificationPublisher.clear()
         when (status?.optString("state")) {
             "RUNNING" -> {
+                resetSelfHealingState()
+                ServiceRecoveryDiagnostics.record(this, "core_running")
+                notificationManager.cancel(ERROR_NOTIFICATION_ID)
                 updateServiceNotification("已准备好发送和接收消息与文件")
                 updateMulticastLock()
             }
             "STARTING" -> updateServiceNotification("正在启动后台接收服务")
             "ERROR" -> {
+                ServiceRecoveryDiagnostics.record(
+                    this,
+                    "core_error",
+                    status.optString("last_error_message", response.optString("error")),
+                )
                 releaseMulticastLock()
                 updateServiceNotification("后台接收发生异常，点击查看")
                 postErrorNotification(status.optString("last_error_message", response.optString("error")))
             }
-            "STOPPED" -> releaseMulticastLock()
+            "STOPPED" -> {
+                ServiceRecoveryDiagnostics.record(this, "core_stopped")
+                releaseMulticastLock()
+            }
         }
     }
 
@@ -317,10 +540,17 @@ class LanChatForegroundService : Service() {
     }
 
     private fun beginExit() {
+        ServiceRecoveryDiagnostics.record(this, "service_exit_requested")
+        if (::batteryAlertController.isInitialized) {
+            batteryAlertController.stop(clearState = true)
+        }
         notificationSessionActive = false
         SyncedNotificationPublisher.clear()
         invalidatePersistedSession(this)
         if (!exiting.compareAndSet(false, true)) return
+        mainHandler.removeCallbacks(startupRecoveryRunnable)
+        foregroundEstablished = false
+        stopHealthMonitor()
         coreStartRequested.set(false)
         if (!jniReadyForSession) {
             finishPlatformExit()
@@ -396,7 +626,7 @@ class LanChatForegroundService : Service() {
         notificationManager.createNotificationChannel(
             NotificationChannel(
                 SERVICE_CHANNEL,
-                "LQ Chat 后台接收",
+                "LQChat 后台接收",
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
                 description = "显示当前后台接收服务状态"
@@ -407,7 +637,7 @@ class LanChatForegroundService : Service() {
         notificationManager.createNotificationChannel(
             NotificationChannel(
                 MESSAGE_CHANNEL,
-                "LQ Chat 消息和文件",
+                "LQChat 消息和文件",
                 NotificationManager.IMPORTANCE_HIGH,
             ).apply {
                 description = "新消息、文件完成和服务错误"
@@ -418,23 +648,33 @@ class LanChatForegroundService : Service() {
         )
     }
 
-    private fun startInForeground(notification: Notification) {
-        if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(
-                SERVICE_NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING or
+    private fun startInForeground(notification: Notification): Boolean {
+        val started = runCatching {
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(
+                    SERVICE_NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING or
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+                )
+            } else if (Build.VERSION.SDK_INT >= 29) {
+                startForeground(
+                    SERVICE_NOTIFICATION_ID,
+                    notification,
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
-            )
-        } else if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(
-                SERVICE_NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
-            )
-        } else {
-            startForeground(SERVICE_NOTIFICATION_ID, notification)
+                )
+            } else {
+                startForeground(SERVICE_NOTIFICATION_ID, notification)
+            }
+        }.onFailure {
+            ServiceRecoveryDiagnostics.record(this, "foreground_start_failed", it.toString())
+            android.util.Log.e(TAG, "前台服务状态建立失败", it)
+        }.isSuccess
+        foregroundEstablished = started
+        if (started) {
+            ServiceRecoveryDiagnostics.record(this, "foreground_started")
         }
+        return started
     }
 
     private fun servicePendingIntent(peerId: String? = null): PendingIntent {
@@ -453,7 +693,7 @@ class LanChatForegroundService : Service() {
     private fun buildServiceNotification(text: String): Notification =
         NotificationCompat.Builder(this, SERVICE_CHANNEL)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("LQ Chat")
+            .setContentTitle("LQChat")
             .setContentText(text)
             .setContentIntent(servicePendingIntent())
             .setOngoing(true)
@@ -494,7 +734,7 @@ class LanChatForegroundService : Service() {
     private fun postErrorNotification(message: String) {
         val notification = NotificationCompat.Builder(this, MESSAGE_CHANNEL)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("LQ Chat 后台接收发生异常")
+            .setContentTitle("LQChat 后台接收发生异常")
             .setContentText(message.ifBlank { "点击打开并重试" })
             .setContentIntent(servicePendingIntent())
             .setAutoCancel(true)

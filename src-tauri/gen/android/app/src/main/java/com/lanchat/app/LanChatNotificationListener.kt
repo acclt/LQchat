@@ -18,16 +18,57 @@ object NotificationSyncNative {
 }
 
 class LanChatNotificationListener : NotificationListenerService() {
+    companion object {
+        internal const val RECOVERY_CHECK_INTERVAL_MS = 60_000L
+
+        internal fun shouldRequestBackgroundRecovery(
+            mayRecover: Boolean,
+            notificationSessionReady: Boolean,
+        ): Boolean = mayRecover && !notificationSessionReady
+
+        internal fun shouldIgnoreProgress(notification: Notification): Boolean {
+            val extras = notification.extras
+            // Test values, not key presence: clearing progress can leave zero/false extras behind.
+            return extras.getInt(Notification.EXTRA_PROGRESS_MAX, 0) > 0 ||
+                extras.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE, false)
+        }
+    }
+
     private val rebindHandler = Handler(Looper.getMainLooper())
     private var rebindAttempt = 0
+    private val recoveryCheck = object : Runnable {
+        override fun run() {
+            val mayRecover = BackgroundRuntimeSettings.mayRecover(this@LanChatNotificationListener)
+            if (shouldRequestBackgroundRecovery(
+                    mayRecover,
+                    LanChatForegroundService.notificationSessionReady(),
+                )
+            ) {
+                runCatching {
+                    LanChatForegroundService.startRecoverySession(
+                        this@LanChatNotificationListener,
+                        "notification-listener-watchdog",
+                    )
+                }.onFailure {
+                    android.util.Log.w("NotificationSync", "通知监听触发后台恢复失败", it)
+                }
+            }
+            if (mayRecover) {
+                rebindHandler.postDelayed(this, RECOVERY_CHECK_INTERVAL_MS)
+            }
+        }
+    }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
         rebindAttempt = 0
+        rebindHandler.removeCallbacks(recoveryCheck)
+        recoveryCheck.run()
     }
 
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
+        rebindHandler.removeCallbacks(recoveryCheck)
         if (!NotificationSyncSettings.isListenerEnabled(this) || !BackgroundRuntimeSettings.mayRecover(this)) return
         val delay = (1L shl minOf(rebindAttempt++, 5)) * 1000L
         rebindHandler.postDelayed({
@@ -66,14 +107,6 @@ class LanChatNotificationListener : NotificationListenerService() {
                 NotificationSyncNative.send(JSONObject().put("notification", notification).put("settings", settings).toString())
             }
         }.onFailure { android.util.Log.w("NotificationSync", "通知采集失败") }
-    }
-    companion object {
-        internal fun shouldIgnoreProgress(notification: Notification): Boolean {
-            val extras = notification.extras
-            // Test values, not key presence: clearing progress can leave zero/false extras behind.
-            return extras.getInt(Notification.EXTRA_PROGRESS_MAX, 0) > 0 ||
-                extras.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE, false)
-        }
     }
     private fun limit(value: String, maximum: Int): String =
         value.substring(0, value.offsetByCodePoints(0, minOf(value.codePointCount(0, value.length), maximum)))

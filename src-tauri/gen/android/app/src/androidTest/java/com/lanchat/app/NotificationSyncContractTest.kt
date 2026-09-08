@@ -116,6 +116,7 @@ class NotificationSyncContractTest {
         try {
             NotificationSyncSettings.command(context, JSONObject().put("action", "save").put("settings",
                 JSONObject().put("push_enabled", true).put("receive_enabled", false)
+                    .put("lq_battery_push_enabled", true)
                     .put("allowed_packages", JSONArray(listOf("example.allowed")))
                     .put("target_device_ids", JSONArray(listOf("phone-b", "pc-c")))).toString())
             LanChatForegroundService.resetProcessNativeReadyForTest()
@@ -127,6 +128,7 @@ class NotificationSyncContractTest {
             LanChatNotificationListener().onNotificationPosted(posted)
             val saved = NotificationSyncSettings.read(context)
             assertTrue(saved.getBoolean("push_enabled"))
+            assertTrue(saved.getBoolean("lq_battery_push_enabled"))
             assertEquals(setOf("phone-b", "pc-c"), NotificationSyncSettings.strings(saved.getJSONArray("target_device_ids")))
         } finally {
             NotificationSyncSettings.command(context, JSONObject().put("action", "save").put("settings", previous).toString())

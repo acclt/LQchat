@@ -3,6 +3,7 @@ package com.lanchat.app
 import android.content.ComponentName
 import android.content.Context
 import android.content.pm.ServiceInfo
+import android.content.pm.ActivityInfo
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -154,6 +155,25 @@ class LanChatServiceContractTest {
     }
 
     @Test
+    fun mainActivityUsesSoftwareRenderingToAvoidVendorGpuTeardownCrash() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        @Suppress("DEPRECATION")
+        val info = context.packageManager.getActivityInfo(
+            ComponentName(context, MainActivity::class.java),
+            0,
+        )
+        assertTrue(info.flags and ActivityInfo.FLAG_HARDWARE_ACCELERATED == 0)
+    }
+
+    @Test
+    fun serviceOwnsAndroidContextInitializationWithoutActivity() {
+        val initialize = LanChatForegroundService::class.java.getDeclaredMethod(
+            "nativeInitializeAndroidContext",
+        )
+        assertEquals(String::class.java, initialize.returnType)
+    }
+
+    @Test
     fun notificationIdsAreDeterministicAndSeparateFromServiceNotification() {
         val first = LanChatForegroundService.notificationIdFor(42L)
         val duplicate = LanChatForegroundService.notificationIdFor(42L)
@@ -185,13 +205,94 @@ class LanChatServiceContractTest {
     fun backgroundPolicySeparatesPreferencesFromCurrentStopBoundary() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val saved = BackgroundRuntimeSettings.save(context, JSONObject()
-            .put("keep_running", true).put("start_on_boot", true).put("exclude_from_recents", true))
+            .put("keep_running", true).put("start_on_boot", true).put("exclude_from_recents", true)
+            .put("battery_alert_enabled", true))
         assertTrue(saved.getBoolean("keep_running"))
+        assertTrue(saved.getBoolean("battery_alert_enabled"))
+        assertTrue(BackgroundRuntimeSettings.batteryAlertEnabled(context))
         assertTrue(BackgroundRuntimeSettings.mayRecover(context))
         BackgroundRuntimeSettings.stopCurrentSession(context)
         assertTrue(BackgroundRuntimeSettings.mayStartOnBoot(context))
         assertFalse(BackgroundRuntimeSettings.mayRecover(context))
         BackgroundRuntimeSettings.beginBootSession(context, 123L)
         assertTrue(BackgroundRuntimeSettings.mayRecover(context))
+    }
+
+    @Test
+    fun batteryAlertsOnlyTargetFiftyAndOneHundredWithThreeFiveSecondReminders() {
+        assertEquals(5_000L, BatteryAlertController.REMINDER_INTERVAL_MS)
+        assertEquals(3, BatteryAlertController.REMINDER_COUNT)
+        assertEquals(50, BatteryAlertController.thresholdFor(-1, 50))
+        assertEquals(100, BatteryAlertController.thresholdFor(-1, 100))
+        assertEquals(50, BatteryAlertController.thresholdFor(49, 51))
+        assertEquals(50, BatteryAlertController.thresholdFor(51, 49))
+        assertEquals(100, BatteryAlertController.thresholdFor(99, 100))
+        assertEquals(null, BatteryAlertController.thresholdFor(-1, 25))
+        assertEquals(null, BatteryAlertController.thresholdFor(-1, 75))
+        assertEquals(null, BatteryAlertController.thresholdFor(50, 50))
+        val targets = org.json.JSONArray(listOf("phone-b"))
+        assertTrue(BatteryAlertController.shouldPush(org.json.JSONObject()
+            .put("push_enabled", true)
+            .put("lq_battery_push_enabled", true)
+            .put("target_device_ids", targets)))
+        assertFalse(BatteryAlertController.shouldPush(org.json.JSONObject()
+            .put("push_enabled", false)
+            .put("lq_battery_push_enabled", true)
+            .put("target_device_ids", targets)))
+        assertFalse(BatteryAlertController.shouldPush(org.json.JSONObject()
+            .put("push_enabled", true)
+            .put("lq_battery_push_enabled", false)
+            .put("target_device_ids", targets)))
+    }
+
+    @Test
+    fun stickyRestartRequiresBackgroundPersistenceAndRespectsUserStop() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+
+        BackgroundRuntimeSettings.save(context, JSONObject()
+            .put("keep_running", false).put("start_on_boot", true))
+        BackgroundRuntimeSettings.beginUserSession(context)
+        assertFalse(LanChatForegroundService.mayRecoverStickyRestart(context))
+
+        BackgroundRuntimeSettings.save(context, JSONObject().put("keep_running", true))
+        assertTrue(LanChatForegroundService.mayRecoverStickyRestart(context))
+
+        BackgroundRuntimeSettings.stopCurrentSession(context)
+        assertFalse(LanChatForegroundService.mayRecoverStickyRestart(context))
+    }
+
+    @Test
+    fun selfHealingOnlyTargetsStoppedOrFailedCoreAndUsesBoundedBackoff() {
+        assertTrue(LanChatForegroundService.isUnhealthyCoreState("ERROR"))
+        assertTrue(LanChatForegroundService.isUnhealthyCoreState("STOPPED"))
+        assertFalse(LanChatForegroundService.isUnhealthyCoreState("STARTING"))
+        assertFalse(LanChatForegroundService.isUnhealthyCoreState("RUNNING"))
+        assertFalse(LanChatForegroundService.isUnhealthyCoreState(null))
+
+        assertEquals(30_000L, LanChatForegroundService.selfHealDelayMs(0))
+        assertEquals(60_000L, LanChatForegroundService.selfHealDelayMs(1))
+        assertEquals(120_000L, LanChatForegroundService.selfHealDelayMs(2))
+        assertEquals(240_000L, LanChatForegroundService.selfHealDelayMs(3))
+        assertEquals(300_000L, LanChatForegroundService.selfHealDelayMs(4))
+        assertEquals(300_000L, LanChatForegroundService.selfHealDelayMs(100))
+    }
+
+    @Test
+    fun notificationListenerOnlyRequestsRecoveryWhenBackgroundSessionIsMissing() {
+        assertTrue(LanChatNotificationListener.shouldRequestBackgroundRecovery(true, false))
+        assertFalse(LanChatNotificationListener.shouldRequestBackgroundRecovery(true, true))
+        assertFalse(LanChatNotificationListener.shouldRequestBackgroundRecovery(false, false))
+        assertEquals(60_000L, LanChatNotificationListener.RECOVERY_CHECK_INTERVAL_MS)
+    }
+
+    @Test
+    fun serviceRecoveryDiagnosticsPersistLastStageWithoutLaunchingActivity() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        ServiceRecoveryDiagnostics.record(context, "contract_test", "background-only")
+        val diagnostics = ServiceRecoveryDiagnostics.read(context)
+        assertEquals("contract_test", diagnostics.getString("stage"))
+        assertEquals("background-only", diagnostics.getString("detail"))
+        assertTrue(diagnostics.getLong("updated_at") > 0L)
+        assertTrue(diagnostics.getInt("pid") > 0)
     }
 }

@@ -46,6 +46,7 @@ pub fn store_windows_activation(argument: &str) -> Option<Value> {
 pub struct Settings {
     pub push_enabled: bool,
     pub receive_enabled: bool,
+    pub lq_battery_push_enabled: bool,
     pub allowed_packages: Vec<String>,
     pub target_device_ids: Vec<String>,
 }
@@ -594,7 +595,7 @@ pub async fn notification_test() -> Result<(), String> {
             source_device_id: String::new(),
             target_device_id: String::new(),
             package: "lanchat.test".into(),
-            app_name: "LQ Chat 测试".into(),
+            app_name: "LQChat 测试".into(),
             app_icon: icon["test_icon"].as_str().map(str::to_owned),
             title: "通知推送测试".into(),
             text: format!("测试时间：{}", chrono::Local::now().format("%H:%M:%S%.3f")),

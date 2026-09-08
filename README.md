@@ -1,5 +1,5 @@
 
-# LANChat
+# LQChat
 
 > A cross-platform, no-registration LAN chat app with file transfer support.
 >

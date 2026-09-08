@@ -819,6 +819,7 @@ body.android-app .android-overlay-panel > .android-page-bar {
 }
 
 body.android-app .android-app-picker-card,
+body.android-app .android-lq-push-card,
 body.android-app .android-push-sources-card {
   width: min(100%, 680px);
   overflow: hidden;
@@ -827,6 +828,25 @@ body.android-app .android-push-sources-card {
   border-radius: 24px;
   background: var(--android-card);
   box-shadow: 0 12px 34px rgba(39, 31, 78, .08);
+}
+
+body.android-app #android-lq-push-panel .settings-content {
+  width: min(100%, 680px);
+}
+
+body.android-app .android-lq-push-card .ns-settings-content {
+  padding: 0;
+}
+
+body.android-app .android-lq-push-card .ns-save-status {
+  min-height: 0;
+  margin: 0;
+  padding: 0 18px 14px;
+  color: var(--android-purple);
+}
+
+body.android-app .android-lq-push-card .ns-save-status:empty {
+  display: none;
 }
 
 body.android-app .android-app-picker-tools {

@@ -9,6 +9,7 @@ window.NotificationUI = (() => {
   let config = {
     push_enabled: false,
     receive_enabled: false,
+    lq_battery_push_enabled: false,
     allowed_packages: [],
     target_device_ids: [],
   };
@@ -16,6 +17,7 @@ window.NotificationUI = (() => {
   let info = {},
     dialog,
     appDialog,
+    lqPushDialog,
     pushSourcesPanel,
     receiveDialog,
     panel,
@@ -450,6 +452,7 @@ window.NotificationUI = (() => {
     try {
       info = await invoke("notification_settings", { settings: next });
       config = info.settings;
+      if (surface === lqPushDialog) renderSettings();
       hint.textContent = "已保存";
       if (appDialog?.open)
         appDialog.querySelector(".ns-save-status").textContent = "已保存";
@@ -566,6 +569,29 @@ window.NotificationUI = (() => {
   function closeAppPicker() {
     appDialog?.classList.remove("is-open");
   }
+  function renderLqPushSettings() {
+    if (!lqPushDialog) return;
+    const content = lqPushDialog.querySelector(".ns-settings-content");
+    content.replaceChildren(
+      toggleRow("电量提醒", config.lq_battery_push_enabled, async (input) => {
+        if (!(await save({ ...config, lq_battery_push_enabled: input.checked }, lqPushDialog)))
+          input.checked = !input.checked;
+      }),
+      el("p", "ns-hint", "开启后，本机的 50% 和 100% 电量提醒会推送给已选择的设备；同时需要开启信息推送。"),
+    );
+  }
+  function openLqPushSettings() {
+    if (!lqPushDialog || busy) return;
+    renderLqPushSettings();
+    lqPushDialog.classList.add("is-open");
+    lqPushDialog.scrollTop = 0;
+    lqPushDialog.querySelector(".ns-save-status").textContent = "";
+    if (location.hash !== "#lq-push")
+      history.pushState({ lqPush: true }, "", "#lq-push");
+  }
+  function closeLqPushSettings() {
+    lqPushDialog?.classList.remove("is-open");
+  }
   async function saveAppPicker() {
     if (!appDialog || busy || appLoading) return;
     const saveButton = appDialog.querySelector("#android-push-apps-save-btn");
@@ -625,7 +651,7 @@ window.NotificationUI = (() => {
       el(
         "p",
         "ns-hint",
-        "双方需先手动启动 LQ Chat。在发送端的信息推送设置中勾选本机；目标离线时直接丢弃，不补发。",
+        "双方需先手动启动 LQChat。在发送端的信息推送设置中勾选本机；目标离线时直接丢弃，不补发。",
       ),
       el(
         "p",
@@ -672,7 +698,7 @@ window.NotificationUI = (() => {
       }
       if (!ids.length)
         choices.append(
-          el("p", "ns-hint", "尚未发现其他设备。请先启动对方的 LQ Chat。"),
+          el("p", "ns-hint", "尚未发现其他设备。请先启动对方的 LQChat。"),
         );
       const appPickerRow = button("", chooseApps, "ns-app-picker-row");
       appPickerRow.append(
@@ -683,9 +709,16 @@ window.NotificationUI = (() => {
           `已选 ${config.allowed_packages.length} 个`,
         ),
       );
+      const lqPushRow = button("", openLqPushSettings, "ns-app-picker-row");
+      lqPushRow.id = "android-lq-push-settings-btn";
+      lqPushRow.append(
+        el("strong", "", "lq推送管理"),
+        el("span", "ns-app-picker-summary", config.lq_battery_push_enabled ? "电量提醒已开启" : "电量提醒已关闭"),
+      );
       panel.append(
         choices,
         appPickerRow,
+        lqPushRow,
         button("发送测试通知", async (event) => {
           const b = event.currentTarget;
           const hint = dialog.querySelector(".ns-save-status");
@@ -844,6 +877,7 @@ window.NotificationUI = (() => {
     if (android) {
       dialog = document.getElementById("android-notification-settings");
       appDialog = document.getElementById("android-push-apps-panel");
+      lqPushDialog = document.getElementById("android-lq-push-panel");
       pushSourcesPanel = document.getElementById("android-push-sources-panel");
       receiveDialog = document.getElementById("android-receive-settings-panel");
       dialog.replaceChildren(
@@ -866,6 +900,12 @@ window.NotificationUI = (() => {
         ?.addEventListener("click", () => {
           if (location.hash === "#push-apps") history.back();
           else closeAppPicker();
+        });
+      document
+        .getElementById("android-lq-push-back-btn")
+        ?.addEventListener("click", () => {
+          if (location.hash === "#lq-push") history.back();
+          else closeLqPushSettings();
         });
       document
         .getElementById("android-push-apps-save-btn")
@@ -917,10 +957,11 @@ window.NotificationUI = (() => {
           ?.append(button("信息接收设置", openSettings));
     }
     window.addEventListener("popstate", () => {
-      const inSettings = android && ["#settings", "#permissions", "#push-apps"].includes(location.hash);
+      const inSettings = android && ["#settings", "#permissions", "#push-apps", "#lq-push"].includes(location.hash);
       const inReceiveSettings = android && location.hash === "#receive-settings";
       if (!inSettings && !inReceiveSettings && location.hash !== "#notifications") leave();
       if (location.hash !== "#push-apps") closeAppPicker();
+      if (location.hash !== "#lq-push") closeLqPushSettings();
       if (location.hash !== "#push-sources") closePushSources();
       if (!inReceiveSettings) closeReceiveSettings();
     });

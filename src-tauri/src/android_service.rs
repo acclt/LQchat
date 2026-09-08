@@ -109,6 +109,21 @@ mod android {
         )
     }
 
+    #[no_mangle]
+    pub extern "system" fn Java_com_lanchat_app_LanChatForegroundService_nativeInitializeAndroidContext(
+        mut env: JNIEnv,
+        service: JObject,
+    ) -> jstring {
+        let result = crate::android_fd::initialize_service_context(&mut env, &service);
+        json_string(
+            &mut env,
+            match result {
+                Ok(()) => serde_json::json!({"ok": true}),
+                Err(error) => serde_json::json!({"ok": false, "error": error}),
+            },
+        )
+    }
+
     fn deliver_event(vm: &JavaVM, service: &GlobalRef, json: String) -> Result<(), String> {
         let mut env = vm
             .attach_current_thread()

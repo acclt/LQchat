@@ -16,6 +16,52 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 #[cfg(target_os = "android")]
+struct AndroidServiceContext {
+    vm: jni::JavaVM,
+    context: jni::objects::GlobalRef,
+}
+
+#[cfg(target_os = "android")]
+fn service_context() -> &'static Mutex<Option<AndroidServiceContext>> {
+    static CONTEXT: OnceLock<Mutex<Option<AndroidServiceContext>>> = OnceLock::new();
+    CONTEXT.get_or_init(|| Mutex::new(None))
+}
+
+/// Register an application Context owned by the foreground service. Unlike
+/// ndk_context, this is available after Android recreates only the Service and
+/// never launches the Tauri Activity.
+#[cfg(target_os = "android")]
+pub fn initialize_service_context(
+    env: &mut jni::JNIEnv<'_>,
+    service: &jni::objects::JObject<'_>,
+) -> Result<(), String> {
+    let vm = env
+        .get_java_vm()
+        .map_err(|error| format!("获取前台服务 JavaVM 失败: {error}"))?;
+    let application_context = env
+        .call_method(
+            service,
+            "getApplicationContext",
+            "()Landroid/content/Context;",
+            &[],
+        )
+        .map_err(|error| format!("获取前台服务 Application Context 失败: {error}"))?
+        .l()
+        .map_err(|error| format!("读取前台服务 Application Context 失败: {error}"))?;
+    if application_context.is_null() {
+        return Err("前台服务 Application Context 为空".to_string());
+    }
+    let context = env
+        .new_global_ref(application_context)
+        .map_err(|error| format!("保存前台服务 Application Context 失败: {error}"))?;
+    let mut slot = service_context()
+        .lock()
+        .map_err(|_| "前台服务 Android Context 锁已损坏".to_string())?;
+    *slot = Some(AndroidServiceContext { vm, context });
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
 type FdCacheEntry = (RawFd, String, u64); // (raw_fd, file_name, file_size)
 
 #[cfg(target_os = "android")]
@@ -719,20 +765,26 @@ pub fn export_received_file(
     file_name: &str,
 ) -> Result<String, String> {
     use jni::objects::{JClass, JObject, JString, JValue};
-    use jni::JavaVM;
-
-    let ctx = ndk_context::android_context();
-    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }
-        .map_err(|error| format!("获取 JavaVM 失败: {error}"))?;
-    let mut env = vm
+    let context_guard = service_context()
+        .lock()
+        .map_err(|_| "前台服务 Android Context 锁已损坏".to_string())?;
+    let service_context = context_guard
+        .as_ref()
+        .ok_or_else(|| "前台服务 Android Context 尚未初始化".to_string())?;
+    let mut env = service_context
+        .vm
         .attach_current_thread()
         .map_err(|error| format!("附加 JNI 线程失败: {error}"))?;
 
     // FindClass 在由 Rust/Tokio 附加的原生线程上只使用系统 ClassLoader，
     // 无法找到应用 Kotlin 类。必须从 Android Context 取得应用 ClassLoader。
-    let context = unsafe { JObject::from_raw(ctx.context().cast()) };
     let class_loader = env
-        .call_method(&context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+        .call_method(
+            service_context.context.as_obj(),
+            "getClassLoader",
+            "()Ljava/lang/ClassLoader;",
+            &[],
+        )
         .map_err(|error| format!("获取应用 ClassLoader 失败: {error}"))?
         .l()
         .map_err(|error| format!("读取应用 ClassLoader 失败: {error}"))?;

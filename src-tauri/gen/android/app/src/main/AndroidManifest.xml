@@ -33,7 +33,7 @@
 
     <application
         android:icon="@mipmap/ic_launcher"
-        android:label="LQ Chat"
+        android:label="LQChat"
         android:theme="@style/Theme.lanchat"
         android:usesCleartextTraffic="true">
         <service
@@ -50,14 +50,15 @@
                 <action android:name="android.intent.action.USER_UNLOCKED" />
             </intent-filter>
         </receiver>
-        <service android:name=".LanChatNotificationListener" android:label="LQ Chat 信息推送"
+        <service android:name=".LanChatNotificationListener" android:label="LQChat 信息推送"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" android:exported="true">
             <intent-filter><action android:name="android.service.notification.NotificationListenerService" /></intent-filter>
         </service>
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+            android:hardwareAccelerated="false"
             android:launchMode="singleTask"
-            android:label="LQ Chat"
+            android:label="LQChat"
             android:name=".MainActivity"
             android:exported="true">
             <intent-filter>

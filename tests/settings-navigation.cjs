@@ -49,7 +49,7 @@ async function main() {
     await poll(() => evaluate('!!document.querySelector(".ns-app-picker-row")'));
     await evaluate(`(() => {
       const original = window.__TAURI__.core.invoke;
-      window.qa = {writes: 0, fail: '', delay: 0, permission:'granted', permissionRequests:0, permissionMode:'deny', background: {keep_running:false,start_on_boot:false,exclude_from_recents:false}};
+      window.qa = {writes: 0, fail: '', delay: 0, permission:'granted', permissionRequests:0, permissionMode:'deny', background: {keep_running:false,start_on_boot:false,exclude_from_recents:false,battery_alert_enabled:false}};
       qa.requestPermission = async () => {
         qa.permissionRequests++;
         if (qa.permissionMode === 'hang') return new Promise(resolve => {qa.resolvePermission=resolve;});
@@ -92,12 +92,13 @@ async function main() {
     const state = () => evaluate(`({hash:location.hash, settings:document.getElementById('settings-panel').style.display === 'block',
       permissions:document.getElementById('permissions-panel').classList.contains('is-open'),
       apps:document.getElementById('android-push-apps-panel').classList.contains('is-open'),
+      lqPush:document.getElementById('android-lq-push-panel').classList.contains('is-open'),
       notifications:!document.querySelector('.ns-detail').hidden,
       receiveSettings:document.getElementById('android-receive-settings-panel').style.display === 'block',
       toast:document.querySelector('.message-action-toast')?.textContent || '', writes:qa.writes})`);
     const expectPage = async (hash, permissions = false, apps = false) => {
       const s = await poll(async () => { const s = await state(); return s.hash === hash && s.permissions === permissions && s.apps === apps && s; });
-      assert.equal(s.settings, ['#settings', '#permissions', '#push-apps'].includes(hash));
+      assert.equal(s.settings, ['#settings', '#permissions', '#push-apps', '#lq-push'].includes(hash));
     };
     const openSettings = async () => {
       await click('#android-settings-btn');
@@ -166,6 +167,7 @@ async function main() {
     assert.equal(await evaluate(`document.querySelectorAll('#permissions-panel .android-permission-copy small').length`),0);
     assert(await evaluate(`!!document.getElementById('android-receive-toggle').closest('.toggle-switch')`));
     assert(await evaluate(`!!document.getElementById('auto-download-toggle').closest('.toggle-switch')`));
+    assert(await evaluate(`!!document.getElementById('battery-alert-toggle').closest('.toggle-switch')`));
     assert(await evaluate(`!!document.querySelector('.ns-push-panel > .ns-toggle-row .toggle-switch')`));
     await poll(()=>evaluate(`document.getElementById('android-notification-access-btn').textContent!=='检查'`));
     await evaluate(`(async()=>{qa.access=false;await NotificationUI.refreshSettings();qa.savedName=document.getElementById('settings-device-name-input').value;document.getElementById('settings-device-name-input').value='Unsaved QA name';qa.oldKeep=document.getElementById('background-keep-running-toggle').checked;document.getElementById('background-keep-running-toggle').checked=!qa.oldKeep;qa.pushNode=document.querySelector('#android-notification-settings input');qa.nameNode=document.getElementById('settings-device-name-input');})()`);
@@ -222,6 +224,10 @@ async function main() {
       await click('.ns-app-picker-row');
       await expectPage('#push-apps', false, true);
       await back(); await expectPage('#settings');
+      await click('#android-lq-push-settings-btn');
+      await expectPage('#lq-push');
+      assert.equal((await state()).lqPush, true);
+      await back(); await expectPage('#settings');
       await back(); await expectPage('');
     }
     passed.push('Repeated settings / permissions / app-picker back navigation');
@@ -230,6 +236,8 @@ async function main() {
     await click('#android-permissions-back-btn'); await expectPage('#settings');
     await click('.ns-app-picker-row');
     await click('#android-push-apps-back-btn'); await expectPage('#settings');
+    await click('#android-lq-push-settings-btn');
+    await click('#android-lq-push-back-btn'); await expectPage('#settings');
     await click('#android-settings-back-btn'); await expectPage('');
     assert.equal((await state()).writes, 0);
     passed.push('Toolbar back matches system history, no implicit writes');
@@ -242,16 +250,28 @@ async function main() {
     await openSettings();
     await click('#android-permissions-btn');
     await evaluate('document.getElementById("background-start-on-boot-toggle").checked = true');
+    await evaluate('document.getElementById("battery-alert-toggle").checked = true');
     await click('#save-permissions-btn'); await expectPage('#settings');
     assert.equal((await state()).toast, '保存成功');
     assert.equal(await evaluate('qa.background.start_on_boot'), true);
+    assert.equal(await evaluate('qa.background.battery_alert_enabled'), true);
     await screenshot('permissions-save-success');
-    passed.push('Background-only change saved with visible success feedback');
+    passed.push('Background and battery-alert changes save with visible success feedback');
     await click('.ns-app-picker-row');
     await poll(() => evaluate('!document.getElementById("android-push-apps-save-btn").disabled'));
     await click('#android-push-apps-save-btn'); await expectPage('#settings');
     assert.equal((await state()).toast, '保存成功');
     passed.push('App selection save returns to settings with success feedback');
+    await click('#android-lq-push-settings-btn');
+    await expectPage('#lq-push');
+    assert.equal(await evaluate(`document.querySelector('#android-lq-push-panel input').checked`), false);
+    await click('#android-lq-push-panel input');
+    await poll(() => evaluate(`document.querySelector('#android-lq-push-panel .ns-save-status').textContent==='已保存'`));
+    assert.equal(await evaluate('qa.notificationWrites > 0'), true);
+    assert.equal(await evaluate(`document.querySelector('#android-lq-push-panel input').checked`), true);
+    await back(); await expectPage('#settings');
+    assert.equal(await evaluate(`document.querySelector('#android-lq-push-settings-btn .ns-app-picker-summary').textContent`), '电量提醒已开启');
+    passed.push('LQ push management page persists the battery forwarding switch');
     await click('#android-permissions-btn');
     await evaluate('qa.fail = "QA persistence failure"');
     await click('#save-permissions-btn');

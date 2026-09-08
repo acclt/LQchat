@@ -1,5 +1,6 @@
 package com.lanchat.app
 
+import android.app.ActivityManager
 import android.content.BroadcastReceiver
 import android.content.ActivityNotFoundException
 import android.content.ClipData
@@ -9,6 +10,7 @@ import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.MediaStore
 import android.provider.DocumentsContract
@@ -116,9 +118,9 @@ class MainActivity : TauriActivity() {
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        applyRecentsPolicy()
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        applyRecentsPolicy()
         AndroidDownloadStore.initialize(applicationContext)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             private var pending = false
@@ -190,14 +192,44 @@ class MainActivity : TauriActivity() {
     fun getBackgroundRuntimeSettings(): String = BackgroundRuntimeSettings.read(this).toString()
 
     @Keep
-    fun setBackgroundRuntimeSettings(input: String): String =
-        BackgroundRuntimeSettings.save(this, JSONObject(input)).also {
-            applyRecentsPolicy(it.optBoolean("exclude_from_recents"))
-        }.toString()
+    fun setBackgroundRuntimeSettings(input: String): String {
+        val saved = BackgroundRuntimeSettings.save(this, JSONObject(input))
+        applyRecentsPolicy(saved.optBoolean("exclude_from_recents"))
+        LanChatForegroundService.refreshBatteryAlerts()
+        return saved.toString()
+    }
 
     private fun applyRecentsPolicy(enabled: Boolean = BackgroundRuntimeSettings.read(this).optBoolean("exclude_from_recents")) {
-        if (enabled) intent.addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
-        else intent.removeFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+        val updateTask = Runnable {
+            if (enabled) intent.addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+            else intent.removeFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+
+            if (isFinishing || isDestroyed) return@Runnable
+            runCatching {
+                val currentTaskId = taskId
+                val activityManager = getSystemService(ActivityManager::class.java)
+                val currentTask = activityManager.appTasks.firstOrNull { appTask ->
+                    val taskInfo = appTask.taskInfo
+                    val appTaskId = if (Build.VERSION.SDK_INT >= 29) {
+                        taskInfo.taskId
+                    } else {
+                        @Suppress("DEPRECATION")
+                        taskInfo.id
+                    }
+                    appTaskId == currentTaskId
+                }
+                if (currentTask == null) {
+                    android.util.Log.w("MainActivity", "未找到当前任务，稍后将在 Activity 重入时重试最近任务策略")
+                } else {
+                    currentTask.setExcludeFromRecents(enabled)
+                }
+            }.onFailure { error ->
+                android.util.Log.w("MainActivity", "更新最近任务隐藏状态失败", error)
+            }
+        }
+
+        if (Looper.myLooper() == Looper.getMainLooper()) updateTask.run()
+        else runOnUiThread(updateTask)
     }
 
     @Keep
@@ -548,6 +580,7 @@ class MainActivity : TauriActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        applyRecentsPolicy()
         
         val sourceDeviceId = intent.getStringExtra(SyncedNotificationPublisher.EXTRA_SOURCE_DEVICE_ID)
         if (!sourceDeviceId.isNullOrBlank() && intent.hasExtra(SyncedNotificationPublisher.EXTRA_HISTORY_RECORD_ID)) {
