@@ -88,11 +88,27 @@ object SyncedNotificationPublisher {
             notification.optString("notification_key").startsWith("lq-battery-") &&
             content.title == "电量提醒"
         if (isBattery) {
-            val title = "${source.ifBlank { notification.optString("source_device_id") }} · 电量"
+            val title = titleWithSource(source, "电量")
             return Presentation(title, "", title)
         }
-        val title = content.title.ifBlank { content.app }
-        return Presentation(title, "来自 $source", "${content.app} · ${content.title}")
+        val title = titleWithSource(source, titleWithApp(content.app, content.title))
+        val sourceLabel = source.trim().takeIf { it.isNotEmpty() }?.let { "来自 $it" }.orEmpty()
+        return Presentation(title, sourceLabel, title)
+    }
+
+    private fun titleWithApp(app: String, title: String): String {
+        val appName = app.trim()
+        val notificationTitle = title.trim()
+        if (appName.isEmpty()) return notificationTitle
+        if (notificationTitle.isEmpty() || notificationTitle == appName) return appName
+        if (notificationTitle.startsWith("$appName · ")) return notificationTitle
+        return "$appName · $notificationTitle"
+    }
+
+    private fun titleWithSource(source: String, title: String): String {
+        val sourceName = source.trim()
+        if (sourceName.isEmpty() || title == sourceName || title.startsWith("$sourceName · ")) return title
+        return "$sourceName · $title"
     }
 
     internal fun presentationForTest(notification: JSONObject, source: String): Presentation =

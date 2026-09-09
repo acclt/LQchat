@@ -2,6 +2,38 @@
 
 本日志只收录能够通过代码提交、正式安装包或构建记录核实的版本。时间均为北京时间（Asia/Shanghai）。
 
+## 2026-09-10 07:39:26 — 7.1（Android versionCode 1071）
+
+### 修复与优化
+
+- 修复接收端通知标题缺少应用名称的问题：Android 和 Windows 的普通远程通知统一显示为“设备名称 · 应用名称 · 原通知标题”。
+- 原通知标题为空或已经包含应用名称时不会重复拼接；电量通知继续保持“设备名称 · 电量”。
+
+### 构建验证
+
+- Android 正式 APK：`LQChat-v7.1-android-arm64.apk`
+- Windows x64 安装程序：`LQChat-v7.1-windows-x64.exe`（产品版本 7.1.0）。
+- Android 包名：`com.lanchat.app`；版本：`7.1`（versionCode 1071）；架构：`arm64-v8a`。
+- Android 主代码和测试代码编译通过；Rust 单元测试 34 项通过、1 项按设计忽略。
+- APK ZIP 对齐验证通过，v2/v3 签名验证通过，签名证书与既有正式版一致，可以覆盖升级。
+- APK SHA-256：`24D53CAA9F7C2F899E62A0D1BC208F145522D152B047D5AFD9BFAD860344F79D`
+- Windows 安装程序 SHA-256：`90DBA6912ED9E1B8FC5481452A4C009FC717FA460CC58BDC275AB63486B87A78`
+
+## 2026-09-09 20:31:10 — Android 7.0（versionCode 1070）
+
+### 优化内容
+
+- 其他设备推送到 Android 接收端的普通通知，标题增加发送设备名称，格式为“设备名称 · 原通知标题”。
+- 电量通知继续显示为“设备名称 · 电量”，避免重复设备名称；设备名称为空时保留原标题。
+
+### 构建验证
+
+- Android 正式 APK：`LQChat-v7.0-android-arm64.apk`
+- Android 包名：`com.lanchat.app`；版本：`7.0`（versionCode 1070）；架构：`arm64-v8a`。
+- Android 主代码和测试代码编译通过；Rust 单元测试 34 项通过、1 项按设计忽略。
+- APK ZIP 对齐验证通过，v2/v3 签名验证通过，签名证书与既有正式版一致，可以覆盖升级。
+- APK SHA-256：`7DB7F655A86302ED89C90135A19DF7469D4F07298A539D7350355416B98F962F`
+
 ## 2026-09-09 19:28:28 — Android 6.9（versionCode 1069）
 
 ### 修复与优化

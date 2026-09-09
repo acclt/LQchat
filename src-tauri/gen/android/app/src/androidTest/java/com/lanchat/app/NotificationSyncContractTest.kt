@@ -37,7 +37,7 @@ class NotificationSyncContractTest {
         assertEquals("IQOO · 电量", presentation.systemTitle)
     }
 
-    @Test fun ordinaryRemoteNotificationPresentationIsUnchanged() {
+    @Test fun ordinaryRemoteNotificationTitleStartsWithSourceDeviceName() {
         val notification = JSONObject()
             .put("source_device_id", "iqoo-id")
             .put("package", "example.messages")
@@ -46,9 +46,30 @@ class NotificationSyncContractTest {
             .put("text", "123456")
             .put("notification_key", "message-1")
         val presentation = SyncedNotificationPublisher.presentationForTest(notification, "IQOO")
-        assertEquals("验证码", presentation.title)
+        assertEquals("IQOO · 短信 · 验证码", presentation.title)
         assertEquals("来自 IQOO", presentation.sourceLabel)
-        assertEquals("短信 · 验证码", presentation.systemTitle)
+        assertEquals("IQOO · 短信 · 验证码", presentation.systemTitle)
+
+        val withoutSource = SyncedNotificationPublisher.presentationForTest(notification, "  ")
+        assertEquals("短信 · 验证码", withoutSource.title)
+        assertEquals("", withoutSource.sourceLabel)
+        assertEquals("短信 · 验证码", withoutSource.systemTitle)
+
+        notification.put("title", "")
+        assertEquals(
+            "IQOO · 短信",
+            SyncedNotificationPublisher.presentationForTest(notification, "IQOO").title,
+        )
+        notification.put("title", "短信")
+        assertEquals(
+            "IQOO · 短信",
+            SyncedNotificationPublisher.presentationForTest(notification, "IQOO").title,
+        )
+        notification.put("title", "短信 · 验证码")
+        assertEquals(
+            "IQOO · 短信 · 验证码",
+            SyncedNotificationPublisher.presentationForTest(notification, "IQOO").title,
+        )
     }
 
     @Test fun syncedNotificationLaunchUsesExplicitImmutableMetadata() {

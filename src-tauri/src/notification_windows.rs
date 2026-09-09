@@ -49,6 +49,32 @@ fn xml_text(value: &str) -> String {
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
 }
+fn display_title(message: &Notification, source: &str) -> String {
+    let is_battery = message.package == "com.lanchat.app"
+        && message.notification_key.starts_with("lq-battery-")
+        && message.title == "电量提醒";
+    let title = if is_battery {
+        "电量".to_string()
+    } else {
+        let app = message.app_name.trim();
+        let title = message.title.trim();
+        if app.is_empty() {
+            title.to_string()
+        } else if title.is_empty() || title == app {
+            app.to_string()
+        } else if title.starts_with(&format!("{app} · ")) {
+            title.to_string()
+        } else {
+            format!("{app} · {title}")
+        }
+    };
+    let source = source.trim();
+    if source.is_empty() || title == source || title.starts_with(&format!("{source} · ")) {
+        title
+    } else {
+        format!("{source} · {title}")
+    }
+}
 // Toast images need a local file. This bounded image-only cache contains no notification text.
 fn toast_xml(
     message: &Notification,
@@ -68,12 +94,13 @@ fn toast_xml(
     let time = chrono::DateTime::from_timestamp_millis(message.post_time)
         .map(|t| t.with_timezone(&chrono::Local).format("%H:%M").to_string())
         .unwrap_or_default();
+    let title = display_title(message, source);
     format!(concat!("<toast launch=\"--notification-activation history:{}:{}\"><visual><binding template=\"ToastGeneric\"><group>",
         "<subgroup hint-weight=\"1\">{}<text hint-style=\"caption\" hint-align=\"center\" hint-wrap=\"true\" hint-maxLines=\"2\">{}</text></subgroup>",
         "<subgroup hint-weight=\"4\"><text hint-style=\"body\" hint-wrap=\"true\" hint-maxLines=\"2\">{}</text>",
         "<text hint-wrap=\"true\" hint-maxLines=\"4\">{}</text><text hint-style=\"captionSubtle\" hint-align=\"right\">{}</text></subgroup>",
         "</group><text placement=\"attribution\">来自 {}</text></binding></visual></toast>"),
-        xml_text(record_id), xml_text(&message.source_device_id), image, xml_text(&message.app_name), xml_text(&message.title), xml_text(&message.text), time, xml_text(source))
+        xml_text(record_id), xml_text(&message.source_device_id), image, xml_text(&message.app_name), xml_text(&title), xml_text(&message.text), time, xml_text(source))
 }
 fn publish(
     message: &Notification,
@@ -207,8 +234,46 @@ pub async fn receive(payload: &serde_json::Value, pool: &sqlx::Pool<sqlx::Sqlite
 
 #[cfg(test)]
 mod tests {
+    fn sample() -> crate::notification_sync::Notification {
+        crate::notification_sync::Notification {
+            msg_type: "notification".into(),
+            event_id: "event-1".into(),
+            source_device_id: "phone-a".into(),
+            target_device_id: "pc".into(),
+            package: "app.chat".into(),
+            app_name: "微信".into(),
+            app_icon: None,
+            title: "张三".into(),
+            text: "你好".into(),
+            notification_key: "key-1".into(),
+            post_time: 1,
+        }
+    }
+
     #[test]
     fn notification_content_cannot_inject_toast_xml() {
         assert_eq!(super::xml_text("<&\"'\u{0}>"), "&lt;&amp;&quot;&apos;&gt;");
+    }
+
+    #[test]
+    fn displayed_title_starts_with_source_and_avoids_battery_duplication() {
+        let mut message = sample();
+        assert_eq!(
+            super::display_title(&message, " IQOO "),
+            "IQOO · 微信 · 张三"
+        );
+        assert_eq!(super::display_title(&message, "  "), "微信 · 张三");
+
+        message.title.clear();
+        assert_eq!(super::display_title(&message, "IQOO"), "IQOO · 微信");
+        message.title = "微信".into();
+        assert_eq!(super::display_title(&message, "IQOO"), "IQOO · 微信");
+        message.title = "微信 · 张三".into();
+        assert_eq!(super::display_title(&message, "IQOO"), "IQOO · 微信 · 张三");
+
+        message.package = "com.lanchat.app".into();
+        message.title = "电量提醒".into();
+        message.notification_key = "lq-battery-50-123-0".into();
+        assert_eq!(super::display_title(&message, "IQOO"), "IQOO · 电量");
     }
 }
