@@ -175,9 +175,10 @@ class BatteryAlertController(
 
     private fun postReminder(threshold: Int, reminderIndex: Int) {
         cancelAlertNotifications()
+        val title = LocalDeviceIdentity.batteryNotificationTitle(LocalDeviceIdentity.read(appContext))
         val notification = NotificationCompat.Builder(appContext, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("电量提醒")
+            .setContentTitle(title)
             .setContentText("$threshold%")
             .setContentIntent(contentIntent())
             .setAutoCancel(true)

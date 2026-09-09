@@ -17,6 +17,12 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class NotificationSyncContractTest {
+    @Test fun localBatteryNotificationUsesConfiguredDeviceName() {
+        assertEquals("IQOO · 电量", LocalDeviceIdentity.batteryNotificationTitle(" IQOO "))
+        assertEquals("本机 · 电量", LocalDeviceIdentity.batteryNotificationTitle("  "))
+        assertNotNull(MainActivity::class.java.getDeclaredMethod("setLocalDeviceName", String::class.java))
+    }
+
     @Test fun remoteBatteryNotificationUsesSourceDeviceInTitleOnly() {
         val notification = JSONObject()
             .put("source_device_id", "iqoo-id")

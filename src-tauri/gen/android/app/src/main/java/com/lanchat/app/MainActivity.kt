@@ -45,6 +45,9 @@ class MainActivity : TauriActivity() {
     @Keep
     fun notificationSettings(input: String): String = NotificationSyncSettings.command(this, input)
 
+    @Keep
+    fun setLocalDeviceName(name: String): String = LocalDeviceIdentity.save(this, name)
+
     // ─── JNI：Rust 侧的回调 ───
     private external fun nativeOnSafFileSelected(uri: String, name: String, size: Long)
     private external fun nativeSetUiVisibility(visible: Boolean)

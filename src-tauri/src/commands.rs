@@ -393,7 +393,12 @@ pub async fn close_android_fd(#[allow(unused_variables)] fd: i32) {
 
 #[tauri::command]
 pub async fn get_my_name(state: State<'_, DbState>) -> Result<String, String> {
-    crate::db::get_username(&state.pool).await
+    let name = crate::db::get_username(&state.pool).await?;
+    #[cfg(target_os = "android")]
+    if let Err(error) = call_android_activity_string_arg("setLocalDeviceName", &name) {
+        eprintln!("[Command] 同步 Android 本机设备名失败: {error}");
+    }
+    Ok(name)
 }
 
 #[tauri::command]
@@ -506,11 +511,17 @@ pub async fn update_my_name(state: State<'_, DbState>, new_name: String) -> Resu
     // 更新数据库
     crate::db::update_username(&state.pool, new_name.clone()).await?;
 
+    let saved_name = crate::db::get_username(&state.pool).await?;
+    #[cfg(target_os = "android")]
+    if let Err(error) = call_android_activity_string_arg("setLocalDeviceName", &saved_name) {
+        eprintln!("[Command] 同步 Android 本机设备名失败: {error}");
+    }
+
     // 数据库更新后，定时广播线程会自动使用新名称
     println!("[Command] 用户名已更新，广播线程将使用新名称");
 
     // 返回更新后的名字
-    Ok(new_name)
+    Ok(saved_name)
 }
 
 #[tauri::command]
