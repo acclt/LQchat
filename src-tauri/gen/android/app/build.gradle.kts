@@ -14,8 +14,8 @@ val tauriProperties = Properties().apply {
 }
 
 // Android 独立版本号：不跟随桌面端的 Tauri/Cargo 版本。
-val lanchatAndroidVersionName = "6.8"
-val lanchatAndroidVersionCode = 1068
+val lanchatAndroidVersionName = "6.9"
+val lanchatAndroidVersionCode = 1069
 // Opt-in device contract tests must not replace the user's installed application or its data.
 val lanchatAcceptanceBuild = providers.gradleProperty("lanchatAcceptance").orNull == "true"
 

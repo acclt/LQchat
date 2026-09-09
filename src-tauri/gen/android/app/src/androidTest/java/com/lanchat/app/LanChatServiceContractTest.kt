@@ -278,6 +278,22 @@ class LanChatServiceContractTest {
     }
 
     @Test
+    fun packageReplaceRecoveryRequiresBackgroundPersistenceAndRespectsUserStop() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+
+        BackgroundRuntimeSettings.save(context, JSONObject()
+            .put("keep_running", false).put("start_on_boot", true))
+        BackgroundRuntimeSettings.beginUserSession(context)
+        assertFalse(LanChatForegroundService.mayRecoverAfterPackageReplace(context))
+
+        BackgroundRuntimeSettings.save(context, JSONObject().put("keep_running", true))
+        assertTrue(LanChatForegroundService.mayRecoverAfterPackageReplace(context))
+
+        BackgroundRuntimeSettings.stopCurrentSession(context)
+        assertFalse(LanChatForegroundService.mayRecoverAfterPackageReplace(context))
+    }
+
+    @Test
     fun selfHealingOnlyTargetsStoppedOrFailedCoreAndUsesBoundedBackoff() {
         assertTrue(LanChatForegroundService.isUnhealthyCoreState("ERROR"))
         assertTrue(LanChatForegroundService.isUnhealthyCoreState("STOPPED"))

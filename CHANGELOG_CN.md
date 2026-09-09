@@ -2,6 +2,23 @@
 
 本日志只收录能够通过代码提交、正式安装包或构建记录核实的版本。时间均为北京时间（Asia/Shanghai）。
 
+## 2026-09-09 19:28:28 — Android 6.9（versionCode 1069）
+
+### 修复与优化
+
+- 增加应用覆盖更新完成后的后台恢复：收到 `MY_PACKAGE_REPLACED` 后，仅在“后台运行”已开启且用户未主动停止时，自动恢复前台服务和 Rust 核心。
+- 更新恢复不会打开应用界面，也不会仅因启用“开机自启”而绕过用户主动停止状态。
+
+### 构建验证
+
+- Android 正式 APK：`LQChat-v6.9-android-arm64.apk`
+- Windows x64 安装程序：`LQChat-v6.9-windows-x64.exe`（产品版本 6.9.0）。
+- Android 包名：`com.lanchat.app`；版本：`6.9`（versionCode 1069）；架构：`arm64-v8a`。
+- Android 主代码和测试代码编译通过；APK 清单确认包含 `MY_PACKAGE_REPLACED`；Rust 单元测试 33 项通过、1 项按设计忽略。
+- APK ZIP 对齐验证通过，v2/v3 签名验证通过，签名证书与桌面 6.8 一致，可以覆盖升级。
+- APK SHA-256：`F172FC09963704D06F021F2F1B339B9AE5FEDF2117EF249DF5DD0AEEF2BCB2C9`
+- Windows 安装程序 SHA-256：`78D277CC5464993512A68379F279E9FCF8CF71DB9E52B509946762ABE45A14EB`
+
 ## 2026-09-09 15:22:26 — Android 6.8（versionCode 1068）
 
 ### 修复与优化

@@ -85,6 +85,14 @@ class LanChatForegroundService : Service() {
             start(context, ACTION_RECOVER, null, source)
         }
 
+        fun startPackageReplaceRecovery(context: Context) {
+            if (!mayRecoverAfterPackageReplace(context)) return
+            start(context, ACTION_RECOVER, null, "package-replaced")
+        }
+
+        internal fun mayRecoverAfterPackageReplace(context: Context): Boolean =
+            BackgroundRuntimeSettings.mayRecover(context)
+
         private fun start(context: Context, action: String, token: String?, source: String? = null) {
             val intent = Intent(context, LanChatForegroundService::class.java).apply {
                 this.action = action
