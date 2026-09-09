@@ -30,6 +30,22 @@ class LanChatServiceContractTest {
             )
         )
         assertNotNull(MainActivity::class.java.getDeclaredMethod("launchDownloadDirectoryPicker"))
+        assertNotNull(MainActivity::class.java.getDeclaredMethod("takeAndroidSharedFiles"))
+    }
+
+    @Test
+    fun systemShareTargetsMainActivityDirectly() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "image/jpeg"
+            setPackage(context.packageName)
+        }
+        val resolved = context.packageManager.resolveActivity(
+            intent,
+            android.content.pm.PackageManager.MATCH_DEFAULT_ONLY,
+        )
+        assertNotNull(resolved)
+        assertEquals(MainActivity::class.java.name, resolved!!.activityInfo.name)
     }
     @Test
     fun serviceManifestKeepsSingleProcessRecoveryContract() {

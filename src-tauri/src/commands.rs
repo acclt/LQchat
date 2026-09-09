@@ -1186,21 +1186,9 @@ pub async fn get_android_shared_files(
 
     #[cfg(target_os = "android")]
     {
-        // 在 Android 上，从 MainActivity 获取分享文件
-        // 通过 Tauri 的事件系统或状态管理获取
-        // 这里我们使用一个全局状态来存储分享文件
-
-        use tauri::Manager;
-
-        // 尝试从应用状态获取分享文件
-        if let Some(share_state) = app.try_state::<AndroidShareState>() {
-            let files = share_state.get_files();
-            println!("[Command] 从状态获取到 {} 个文件", files.len());
-            return Ok(files);
-        }
-
-        println!("[Command] 没有找到分享状态");
-        Ok(vec![])
+        let _ = app;
+        let json = call_android_activity_string("takeAndroidSharedFiles")?;
+        serde_json::from_str(&json).map_err(|error| format!("解析 Android 分享文件失败: {error}"))
     }
 
     #[cfg(not(target_os = "android"))]

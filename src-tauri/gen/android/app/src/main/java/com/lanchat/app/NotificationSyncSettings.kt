@@ -30,11 +30,7 @@ object NotificationSyncSettings {
 
     private fun selectableApps(context: Context) = context.packageManager.getInstalledApplications(0)
         .asSequence()
-        .filter {
-            it.enabled && it.packageName != context.packageName &&
-                ((it.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) == 0 ||
-                    context.packageManager.getLaunchIntentForPackage(it.packageName) != null)
-        }
+        .filter { it.enabled && it.packageName != context.packageName }
         .sortedWith(compareBy({ context.packageManager.getApplicationLabel(it).toString().lowercase() }, { it.packageName }))
 
     /** One editor commit replaces the complete snapshot. A failed commit restores the prior value. */
@@ -76,6 +72,7 @@ object NotificationSyncSettings {
                 val apps = selectableApps(context).map {
                     JSONObject().put("package", it.packageName)
                         .put("name", context.packageManager.getApplicationLabel(it).toString())
+                        .put("is_system", (it.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0)
                         .put("icon", NotificationAppIcon.encode(context, it.packageName))
                         .put("selected", it.packageName in strings(selected))
                 }.toList()

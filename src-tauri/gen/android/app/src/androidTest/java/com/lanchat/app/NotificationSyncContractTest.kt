@@ -89,6 +89,36 @@ class NotificationSyncContractTest {
         }
     }
 
+    @Test fun selectableAppsIncludeEnabledSystemPackagesAndExposeTheirCategory() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val previous = NotificationSyncSettings.read(context)
+        val response = JSONObject(NotificationSyncSettings.command(
+            context,
+            JSONObject().put("action", "apps").toString(),
+        ))
+        val apps = response.getJSONArray("apps")
+        val systemUi = (0 until apps.length())
+            .map { apps.getJSONObject(it) }
+            .firstOrNull { it.getString("package") == "com.android.systemui" }
+        assertNotNull(systemUi)
+        assertTrue(systemUi!!.getBoolean("is_system"))
+        try {
+            val replace = JSONObject().put("action", "replace_allowed")
+                .put("payload", JSONObject().put("packages", JSONArray().put("com.android.systemui")))
+            val saved = JSONObject(NotificationSyncSettings.command(context, replace.toString()))
+            assertFalse(saved.has("error"))
+            assertEquals(
+                setOf("com.android.systemui"),
+                NotificationSyncSettings.strings(saved.getJSONObject("settings").getJSONArray("allowed_packages")),
+            )
+        } finally {
+            NotificationSyncSettings.command(
+                context,
+                JSONObject().put("action", "save").put("settings", previous).toString(),
+            )
+        }
+    }
+
     @Suppress("DEPRECATION")
     @Test fun standardProgressIsIgnoredAtStartDuringAndAtOneHundredPercent() {
         val context = ApplicationProvider.getApplicationContext<Context>()

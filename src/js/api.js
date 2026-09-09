@@ -755,6 +755,16 @@ async function apiGetAndroidSharedFiles() {
     return JSON.parse(JSON.stringify(window.__ANDROID_SHARED_FILES__));
   }
 
+  const tauri = getTauri();
+  if (tauri && navigator.userAgent.includes("Android")) {
+    const files = await tauri.core.invoke("get_android_shared_files");
+    if (Array.isArray(files) && files.length > 0) {
+      window.__ANDROID_SHARED_FILES__ = files;
+      console.log("[JS-API] 已从 Android 领取分享文件:", files.length);
+      return JSON.parse(JSON.stringify(files));
+    }
+  }
+
   console.log("[JS-API] 全局变量为空，没有分享文件");
   return [];
 }

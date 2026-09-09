@@ -218,7 +218,15 @@
                 <input id="android-push-apps-search" type="search" placeholder="搜索应用名称" aria-label="搜索应用名称" autocomplete="off">
                 <div class="android-app-picker-selection">
                     <label><input id="android-push-apps-select-all" type="checkbox"><span id="android-push-apps-select-all-label">全选</span></label>
-                    <span id="android-push-apps-count" role="status">已选 0 个</span>
+                    <div class="android-app-picker-filter">
+                        <span id="android-push-apps-count" role="status">已选 0 个</span>
+                        <label class="android-app-category-label" for="android-push-apps-category">分类</label>
+                        <select id="android-push-apps-category" aria-label="选择应用分类">
+                            <option value="all">全部显示</option>
+                            <option value="user">用户软件</option>
+                            <option value="system">系统软件</option>
+                        </select>
+                    </div>
                 </div>
             </div>
             <section class="android-app-picker-card">

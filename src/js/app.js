@@ -194,31 +194,6 @@ async function renderPage() {
     startStreamingWebSocket();
   }
 
-  // ==========================================
-  // 冷启动分享数据补偿机制
-  // ==========================================
-  // 留给 Tauri 和后端 1.5 秒的初始化时间，然后主动查一次数据
-  if (!previewMode) setTimeout(async () => {
-    // 如果页面已经存在分享弹窗，说明原生广播事件已经正常触发过了，直接跳过，防止重复弹窗！
-    if (document.querySelector(".share-dialog")) {
-      console.log("[JS-App] 分享弹窗已存在，跳过冷启动补偿检测");
-      return;
-    }
-
-    try {
-      console.log("[JS-App] 执行冷启动分享主动检测...");
-      const sharedFiles = await apiGetAndroidSharedFiles();
-      if (sharedFiles && sharedFiles.length > 0) {
-        console.log(
-          "[JS-App] 冷启动主动检测到分享文件，准备弹窗:",
-          sharedFiles,
-        );
-        showShareDialog(sharedFiles);
-      }
-    } catch (e) {
-      console.error("[JS-App] 冷启动检查分享文件失败:", e);
-    }
-  }, 1500);
 }
 
 async function refreshPeerListNow() {
@@ -300,13 +275,20 @@ function initAndroidSaveBars() {
   document.querySelectorAll(".android-save-bar").forEach((bar) => observer.observe(bar));
 }
 
-document.addEventListener("DOMContentLoaded", renderPage);
+document.addEventListener("DOMContentLoaded", () => {
+  void consumeAndroidShare();
+  void renderPage();
+});
 
 // 监听 Android 分享事件
-window.addEventListener("android-share-received", async () => {
+window.addEventListener("android-share-received", () => {
   console.log("[JS-App] ========== 收到 Android 分享事件 ==========");
+  void consumeAndroidShare();
+});
 
+async function consumeAndroidShare() {
   try {
+    if (document.querySelector(".share-dialog")) await apiClearAndroidSharedFiles();
     const sharedFiles = await apiGetAndroidSharedFiles();
     console.log("[JS-App] 分享的文件:", sharedFiles);
 
@@ -316,27 +298,29 @@ window.addEventListener("android-share-received", async () => {
     }
 
     console.log("[JS-App] 准备显示分享对话框");
-    // 显示在线用户选择弹窗
     showShareDialog(sharedFiles);
   } catch (e) {
     console.error("[JS-App] 处理 Android 分享失败:", e);
   }
-});
+}
 
 console.log("[JS-App] Android 分享事件监听器已注册");
 
-// 全局变量保存分享弹窗的定时器
-window.shareDialogInterval = null;
+window.shareDialogPeerObserver = null;
+window.shareDialogPeerSignature = "";
+
+function stopShareDialogPeerObserver() {
+  window.shareDialogPeerObserver?.disconnect();
+  window.shareDialogPeerObserver = null;
+  window.shareDialogPeerSignature = "";
+}
 
 // 显示分享对话框
 function showShareDialog(sharedFiles) {
   console.log("[JS-App] showShareDialog 被调用，文件数:", sharedFiles.length);
 
   // 仅清理旧 DOM，绝不能在这里调用 apiClearAndroidSharedFiles 误杀 FD！
-  if (window.shareDialogInterval) {
-    clearInterval(window.shareDialogInterval);
-    window.shareDialogInterval = null;
-  }
+  stopShareDialogPeerObserver();
   const oldDialog = document.querySelector(".share-dialog");
   if (oldDialog) oldDialog.remove();
 
@@ -361,15 +345,16 @@ function showShareDialog(sharedFiles) {
   }
 
   syncShareUserList(sharedFiles);
-
-  window.shareDialogInterval = setInterval(() => {
-    if (!document.getElementById("share-user-list")) {
-      clearInterval(window.shareDialogInterval);
-      window.shareDialogInterval = null;
-      return;
-    }
-    syncShareUserList(sharedFiles);
-  }, 1000);
+  const peerList = document.getElementById("user-list");
+  if (peerList) {
+    window.shareDialogPeerObserver = new MutationObserver(() => syncShareUserList(sharedFiles));
+    window.shareDialogPeerObserver.observe(peerList, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["class", "data-name", "data-addr"],
+    });
+  }
 }
 
 // ================= 弹窗内用户列表的增量同步魔法 =================
@@ -398,7 +383,10 @@ function syncShareUserList(sharedFiles) {
     return a.name.localeCompare(b.name);
   });
 
-  // 重建弹窗列表
+  const signature = JSON.stringify(allEntries);
+  if (signature === window.shareDialogPeerSignature) return;
+  window.shareDialogPeerSignature = signature;
+
   userList.innerHTML = "";
 
   if (allEntries.length === 0) {
@@ -420,10 +408,7 @@ function syncShareUserList(sharedFiles) {
 
 // 用户主动取消分享
 function cancelShareDialog() {
-  if (window.shareDialogInterval) {
-    clearInterval(window.shareDialogInterval);
-    window.shareDialogInterval = null;
-  }
+  stopShareDialogPeerObserver();
   const dialog = document.querySelector(".share-dialog");
   if (dialog) dialog.remove();
 
@@ -440,10 +425,7 @@ async function handleShareToUser(userId, userName, userAddr, sharedFiles) {
   window.__ANDROID_SHARED_FILES__ = null;
 
   // 清理弹窗 DOM
-  if (window.shareDialogInterval) {
-    clearInterval(window.shareDialogInterval);
-    window.shareDialogInterval = null;
-  }
+  stopShareDialogPeerObserver();
   const dialog = document.querySelector(".share-dialog");
   if (dialog) dialog.remove();
 
@@ -474,8 +456,6 @@ function formatFileSize(bytes) {
   }
   return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB";
 }
-
-document.addEventListener("DOMContentLoaded", renderPage);
 
 // Web 端轮询新消息
 async function startMessagePolling() {

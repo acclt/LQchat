@@ -1,12 +1,10 @@
 package com.lanchat.app
 
 import android.app.ActivityManager
-import android.content.BroadcastReceiver
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -52,9 +50,10 @@ class MainActivity : TauriActivity() {
     private external fun nativeOnSafFileSelected(uri: String, name: String, size: Long)
     private external fun nativeSetUiVisibility(visible: Boolean)
 
-    private var pendingSharedFiles: List<SharedFileInfo>? = null
+    @Volatile private var pendingSharedFiles: List<SharedFileInfo>? = null
+    @Volatile private var shareFrontendReady = false
+    @Volatile private var shareNotificationDispatched = false
     private var webView: WebView? = null
-    private var shareReceiver: BroadcastReceiver? = null
     private var lastNotificationFromId: String? = null
 
     // ─── SAF 文件选择器（持久化权限） ───
@@ -114,10 +113,11 @@ class MainActivity : TauriActivity() {
     }
 
     data class SharedFileInfo(
-        val uri: Uri,
+        val uri: String,
         val fileName: String,
         val fileSize: Long,
-        val mimeType: String?
+        val mimeType: String,
+        val fd: Int,
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -125,6 +125,7 @@ class MainActivity : TauriActivity() {
         super.onCreate(savedInstanceState)
         applyRecentsPolicy()
         AndroidDownloadStore.initialize(applicationContext)
+        captureSharedFiles(intent)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             private var pending = false
 
@@ -165,9 +166,6 @@ class MainActivity : TauriActivity() {
 
         // 开启 WebView 调试（方便 adb logcat 看到 JS console 输出）
         android.webkit.WebView.setWebContentsDebuggingEnabled(true)
-        
-        // 注册广播接收器
-        registerShareReceiver()
         
         // 检测冷启动是否来自通知点击
         checkNotificationLaunch(intent)
@@ -465,28 +463,12 @@ class MainActivity : TauriActivity() {
         }
     }
 
-    private fun registerShareReceiver() {
-        shareReceiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                println("[MainActivity] 收到分享广播")
-                checkAndPushSharedFiles()
-            }
-        }
-        val filter = IntentFilter("com.lanchat.app.SHARE_RECEIVED")
-        registerReceiver(shareReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-    }
-
-    // 核心推送函数
-    private fun checkAndPushSharedFiles() {
-        val files = ShareDataHolder.sharedFiles
-        if (files == null || files.isEmpty()) return
-
-        println("[MainActivity] 准备推送 ${files.size} 个文件到前端")
-        
-        // 一旦取出数据，立刻清空保险箱！
-        // 这样哪怕 onResume 和 广播 同时触发，第二个进来的也只能拿到 null，彻底杜绝双重注入！
-        ShareDataHolder.sharedFiles = null
-
+    @Keep
+    @Synchronized
+    fun takeAndroidSharedFiles(): String {
+        shareFrontendReady = true
+        val files = pendingSharedFiles.orEmpty()
+        pendingSharedFiles = null
         val jsonArray = JSONArray()
         files.forEach { file ->
             val jsonObj = JSONObject().apply {
@@ -498,67 +480,80 @@ class MainActivity : TauriActivity() {
             }
             jsonArray.put(jsonObj)
         }
-        val jsonString = jsonArray.toString()
-        
-        injectDataIntoWebView(jsonString, 0)
+        println("[MainActivity] 前端领取 ${files.size} 个分享文件")
+        return jsonArray.toString()
     }
 
-    // 智能重试空投机制
-    private fun injectDataIntoWebView(jsonString: String, attempt: Int) {
-        val maxAttempts = 20 // 允许重试20次（10秒），彻底防住冷启动慢的问题
-        if (attempt >= maxAttempts) {
-            println("[MainActivity] 放弃注入分享数据，重试次数过多")
-            return
+    private fun captureSharedFiles(sourceIntent: Intent?): Boolean {
+        val action = sourceIntent?.action ?: return false
+        if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return false
+        val mimeType = sourceIntent.type ?: "application/octet-stream"
+        @Suppress("DEPRECATION")
+        val uris = when (action) {
+            Intent.ACTION_SEND -> listOfNotNull(sourceIntent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
+            else -> sourceIntent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
         }
-
-        if (webView == null) {
-            webView = findWebView(window.decorView)
+        val files = uris.mapNotNull { readSharedFile(it, mimeType) }
+        if (files.isEmpty()) return false
+        synchronized(this) {
+            releasePendingSharedFilesLocked()
+            pendingSharedFiles = files
+            shareNotificationDispatched = false
         }
+        println("[MainActivity] 已接收 ${files.size} 个系统分享文件")
+        return true
+    }
 
-        if (webView != null) {
-            runOnUiThread {
-                webView?.evaluateJavascript(
-                    """
-                    (function() {
-                        // 确保 JS 运行环境已存在
-                        if (typeof window !== 'undefined') {
-                            // 直接把数据空投进 window 全局变量
-                            window.__ANDROID_SHARED_FILES__ = $jsonString;
-                            console.log('[MainActivity->JS] 数据已成功空投到 window.__ANDROID_SHARED_FILES__');
-                            // 触发事件通知前端
-                            if (window.dispatchEvent) {
-                                window.dispatchEvent(new CustomEvent('android-share-received'));
-                            }
-                            return "success";
-                        }
-                        return "not_ready";
-                    })();
-                    """.trimIndent()
-                ) { result ->
-                    if (result == "\"success\"") {
-                        println("[MainActivity] 数据成功推送到前端 (尝试 ${attempt + 1})")
-                        // 确保只推送一次，推送成功后立刻清空原生层保险箱
-                        ShareDataHolder.sharedFiles = null 
-                    } else {
-                        println("[MainActivity] 前端 window 未就绪，500ms 后重试...")
-                        window.decorView.postDelayed({ injectDataIntoWebView(jsonString, attempt + 1) }, 500)
-                    }
-                }
+    private fun readSharedFile(uri: Uri, mimeType: String): SharedFileInfo? = runCatching {
+        var fileName = uri.lastPathSegment ?: "shared_file"
+        var fileSize = 0L
+        contentResolver.query(
+            uri,
+            arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (nameIndex >= 0 && !cursor.isNull(nameIndex)) fileName = cursor.getString(nameIndex)
+                if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) fileSize = cursor.getLong(sizeIndex)
             }
-        } else {
-            println("[MainActivity] 找不到 WebView，500ms 后重试...")
-            window.decorView.postDelayed({ injectDataIntoWebView(jsonString, attempt + 1) }, 500)
         }
+        val descriptor = contentResolver.openFileDescriptor(uri, "r")
+            ?: throw FileNotFoundException("无法打开分享文件")
+        val fd = descriptor.detachFd()
+        SharedFileInfo(uri.toString(), fileName, fileSize, mimeType, fd)
+    }.onFailure {
+        println("[MainActivity] 读取分享文件失败: ${it.message}")
+    }.getOrNull()
+
+    @Synchronized
+    private fun notifyShareAvailable() {
+        if (!shareFrontendReady || pendingSharedFiles.isNullOrEmpty() || shareNotificationDispatched) return
+        if (webView == null) webView = findWebView(window.decorView)
+        val currentWebView = webView ?: return
+        shareNotificationDispatched = true
+        currentWebView.evaluateJavascript(
+            "window.dispatchEvent(new CustomEvent('android-share-received'));",
+            null,
+        )
+    }
+
+    @Synchronized
+    private fun releasePendingSharedFilesLocked() {
+        pendingSharedFiles.orEmpty().forEach { file ->
+            if (file.fd >= 0) runCatching { android.os.ParcelFileDescriptor.adoptFd(file.fd).close() }
+        }
+        pendingSharedFiles = null
+        shareNotificationDispatched = false
     }
 
     override fun onDestroy() {
         nativeSetUiVisibility(false)
+        synchronized(this) { releasePendingSharedFilesLocked() }
         super.onDestroy()
-        // 注销广播接收器
-        shareReceiver?.let {
-            unregisterReceiver(it)
-            println("[MainActivity] 广播接收器已注销")
-        }
     }
 
     private fun findWebView(view: android.view.View): WebView? {
@@ -584,6 +579,10 @@ class MainActivity : TauriActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         applyRecentsPolicy()
+        if (captureSharedFiles(intent)) {
+            notifyShareAvailable()
+            return
+        }
         
         val sourceDeviceId = intent.getStringExtra(SyncedNotificationPublisher.EXTRA_SOURCE_DEVICE_ID)
         if (!sourceDeviceId.isNullOrBlank() && intent.hasExtra(SyncedNotificationPublisher.EXTRA_HISTORY_RECORD_ID)) {
@@ -608,7 +607,7 @@ class MainActivity : TauriActivity() {
     override fun onResume() {
         super.onResume()
         println("[MainActivity] onResume 被调用")
-        checkAndPushSharedFiles()
+        notifyShareAvailable()
     }
     
 

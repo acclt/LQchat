@@ -28,7 +28,8 @@ window.NotificationUI = (() => {
     busy = false;
   let appOptions = [],
     appSelection = new Set(),
-    appLoading = false;
+    appLoading = false,
+    appCategory = "all";
   let accessRefresh = null;
 
   function renderNotificationAccess() {
@@ -486,7 +487,12 @@ window.NotificationUI = (() => {
   }
   function filteredApps() {
     const query = appDialog.querySelector("#android-push-apps-search").value.trim().toLocaleLowerCase();
-    return appOptions.filter((app) => (app.name || app.package).toLocaleLowerCase().includes(query));
+    return appOptions.filter((app) => {
+      const categoryMatches = appCategory === "all" ||
+        (appCategory === "system" ? app.is_system : !app.is_system);
+      const text = `${app.name || ""}\n${app.package || ""}`.toLocaleLowerCase();
+      return categoryMatches && text.includes(query);
+    });
   }
   function updateAppSelectionControls() {
     const visible = filteredApps();
@@ -496,6 +502,7 @@ window.NotificationUI = (() => {
     all.indeterminate = count > 0 && count < visible.length;
     all.disabled = appLoading || busy || !visible.length;
     appDialog.querySelector("#android-push-apps-search").disabled = appLoading || busy;
+    appDialog.querySelector("#android-push-apps-category").disabled = appLoading || busy;
     appDialog.querySelector("#android-push-apps-save-btn").disabled = appLoading || busy;
     appDialog.querySelector("#android-push-apps-select-all-label").textContent =
       appDialog.querySelector("#android-push-apps-search").value.trim() ? "全选搜索结果" : "全选";
@@ -510,9 +517,10 @@ window.NotificationUI = (() => {
     updateAppSelectionControls();
     empty.hidden = visible.length > 0;
     if (!visible.length) {
-      empty.textContent = appOptions.length ? "未找到匹配的应用" : "未发现可选择的应用";
+      empty.textContent = appOptions.length ? "当前分类下没有匹配的应用" : "未发现可选择的应用";
       return;
     }
+    const fragment = document.createDocumentFragment();
     for (const app of visible) {
       const row = el("label", "android-push-app-row");
       const icon = el("span", "android-push-app-icon");
@@ -520,11 +528,17 @@ window.NotificationUI = (() => {
         const image = document.createElement("img");
         image.alt = "";
         image.src = `data:image/png;base64,${app.icon}`;
+        image.loading = "lazy";
+        image.decoding = "async";
         icon.append(image);
       } else {
         icon.textContent = Array.from(app.name || app.package || "应用")[0];
       }
+      const identity = el("span", "android-push-app-identity");
       const name = el("span", "android-push-app-name", app.name || app.package);
+      const details = el("span", "android-push-app-package", app.package);
+      if (app.is_system) details.append(el("span", "android-push-app-system-tag", "系统"));
+      identity.append(name, details);
       const input = document.createElement("input");
       input.type = "checkbox";
       input.checked = appSelection.has(app.package);
@@ -535,9 +549,10 @@ window.NotificationUI = (() => {
           : appSelection.delete(app.package);
         updateAppSelectionControls();
       });
-      row.append(icon, name, input);
-      list.append(row);
+      row.append(icon, identity, input);
+      fragment.append(row);
     }
+    list.append(fragment);
   }
   async function chooseApps() {
     if (!appDialog || busy || appDialog.classList.contains("is-open")) return;
@@ -545,6 +560,8 @@ window.NotificationUI = (() => {
     appOptions = [];
     appSelection = new Set(config.allowed_packages);
     appDialog.querySelector("#android-push-apps-search").value = "";
+    appCategory = "all";
+    appDialog.querySelector("#android-push-apps-category").value = appCategory;
     updateAppSelectionControls();
     appDialog.classList.add("is-open");
     appDialog.scrollTop = 0;
@@ -912,6 +929,11 @@ window.NotificationUI = (() => {
         ?.addEventListener("click", saveAppPicker);
       document.getElementById("android-push-apps-search")
         ?.addEventListener("input", renderAppPicker);
+      document.getElementById("android-push-apps-category")
+        ?.addEventListener("change", (event) => {
+          appCategory = event.target.value;
+          renderAppPicker();
+        });
       document.getElementById("android-push-apps-select-all")
         ?.addEventListener("change", (event) => {
           for (const app of filteredApps()) {
