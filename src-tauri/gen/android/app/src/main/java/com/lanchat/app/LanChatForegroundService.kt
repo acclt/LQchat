@@ -116,7 +116,7 @@ class LanChatForegroundService : Service() {
             val service = activeInstance ?: return
             service.mainHandler.post {
                 if (!service.exiting.get() && service::batteryAlertController.isInitialized) {
-                    service.batteryAlertController.refresh()
+                    service.batteryAlertController.refresh(resetPendingSequence = true)
                 }
             }
         }

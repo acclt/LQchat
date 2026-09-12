@@ -594,7 +594,7 @@ window.NotificationUI = (() => {
         if (!(await save({ ...config, lq_battery_push_enabled: input.checked }, lqPushDialog)))
           input.checked = !input.checked;
       }),
-      el("p", "ns-hint", "开启后，本机的 50% 和 100% 电量提醒会推送给已选择的设备；同时需要开启信息推送。"),
+      el("p", "ns-hint", "开启后，本机按自定义规则产生的电量提醒会推送给已选择的设备；同时需要开启信息推送。"),
     );
   }
   function openLqPushSettings() {

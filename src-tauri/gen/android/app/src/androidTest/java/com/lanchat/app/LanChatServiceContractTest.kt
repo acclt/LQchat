@@ -11,6 +11,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -222,10 +223,16 @@ class LanChatServiceContractTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val saved = BackgroundRuntimeSettings.save(context, JSONObject()
             .put("keep_running", true).put("start_on_boot", true).put("exclude_from_recents", true)
-            .put("battery_alert_enabled", true))
+            .put("battery_alert_enabled", true)
+            .put("battery_alert_interval_seconds", 12)
+            .put("battery_alert_repeat_count", 4)
+            .put("battery_alert_levels", org.json.JSONArray(listOf(25, 80))))
         assertTrue(saved.getBoolean("keep_running"))
         assertTrue(saved.getBoolean("battery_alert_enabled"))
         assertTrue(BackgroundRuntimeSettings.batteryAlertEnabled(context))
+        assertEquals(12_000L, BackgroundRuntimeSettings.batteryAlertIntervalMs(context))
+        assertEquals(4, BackgroundRuntimeSettings.batteryAlertRepeatCount(context))
+        assertEquals(setOf(25, 80), BackgroundRuntimeSettings.batteryAlertLevels(context))
         assertTrue(BackgroundRuntimeSettings.mayRecover(context))
         BackgroundRuntimeSettings.stopCurrentSession(context)
         assertTrue(BackgroundRuntimeSettings.mayStartOnBoot(context))
@@ -235,17 +242,17 @@ class LanChatServiceContractTest {
     }
 
     @Test
-    fun batteryAlertsOnlyTargetFiftyAndOneHundredWithThreeFiveSecondReminders() {
-        assertEquals(5_000L, BatteryAlertController.REMINDER_INTERVAL_MS)
-        assertEquals(3, BatteryAlertController.REMINDER_COUNT)
-        assertEquals(50, BatteryAlertController.thresholdFor(-1, 50))
-        assertEquals(100, BatteryAlertController.thresholdFor(-1, 100))
-        assertEquals(50, BatteryAlertController.thresholdFor(49, 51))
-        assertEquals(50, BatteryAlertController.thresholdFor(51, 49))
-        assertEquals(100, BatteryAlertController.thresholdFor(99, 100))
-        assertEquals(null, BatteryAlertController.thresholdFor(-1, 25))
-        assertEquals(null, BatteryAlertController.thresholdFor(-1, 75))
-        assertEquals(null, BatteryAlertController.thresholdFor(50, 50))
+    fun batteryAlertsUseConfiguredLevelsAndChooseTheCrossingNearestCurrentLevel() {
+        assertEquals(5_000L, BatteryAlertController.DEFAULT_REMINDER_INTERVAL_MS)
+        assertEquals(3, BatteryAlertController.DEFAULT_REMINDER_COUNT)
+        val levels = setOf(25, 50, 80, 100)
+        assertEquals(50, BatteryAlertController.thresholdFor(-1, 50, levels))
+        assertEquals(100, BatteryAlertController.thresholdFor(-1, 100, levels))
+        assertEquals(80, BatteryAlertController.thresholdFor(49, 90, levels))
+        assertEquals(50, BatteryAlertController.thresholdFor(90, 40, levels))
+        assertEquals(100, BatteryAlertController.thresholdFor(99, 100, levels))
+        assertEquals(null, BatteryAlertController.thresholdFor(-1, 30, levels))
+        assertEquals(null, BatteryAlertController.thresholdFor(50, 50, levels))
         val targets = org.json.JSONArray(listOf("phone-b"))
         assertTrue(BatteryAlertController.shouldPush(org.json.JSONObject()
             .put("push_enabled", true)
@@ -259,6 +266,23 @@ class LanChatServiceContractTest {
             .put("push_enabled", true)
             .put("lq_battery_push_enabled", false)
             .put("target_device_ids", targets)))
+    }
+
+    @Test
+    fun batteryAlertSettingsRejectUnsafeRangesBeforePersisting() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        assertThrows(IllegalArgumentException::class.java) {
+            BackgroundRuntimeSettings.save(context, JSONObject().put("battery_alert_interval_seconds", 0))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            BackgroundRuntimeSettings.save(context, JSONObject().put("battery_alert_repeat_count", 11))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            BackgroundRuntimeSettings.save(
+                context,
+                JSONObject().put("battery_alert_levels", org.json.JSONArray(listOf(0, 101))),
+            )
+        }
     }
 
     @Test

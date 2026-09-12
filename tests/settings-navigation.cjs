@@ -49,7 +49,7 @@ async function main() {
     await poll(() => evaluate('!!document.querySelector(".ns-app-picker-row")'));
     await evaluate(`(() => {
       const original = window.__TAURI__.core.invoke;
-      window.qa = {writes: 0, fail: '', delay: 0, permission:'granted', permissionRequests:0, permissionMode:'deny', background: {keep_running:false,start_on_boot:false,exclude_from_recents:false,battery_alert_enabled:false}};
+      window.qa = {writes: 0, fail: '', delay: 0, permission:'granted', permissionRequests:0, permissionMode:'deny', background: {keep_running:false,start_on_boot:false,exclude_from_recents:false,battery_alert_enabled:false,battery_alert_interval_seconds:5,battery_alert_repeat_count:3,battery_alert_levels:[50,100]}};
       qa.requestPermission = async () => {
         qa.permissionRequests++;
         if (qa.permissionMode === 'hang') return new Promise(resolve => {qa.resolvePermission=resolve;});
@@ -168,6 +168,8 @@ async function main() {
     assert(await evaluate(`!!document.getElementById('android-receive-toggle').closest('.toggle-switch')`));
     assert(await evaluate(`!!document.getElementById('auto-download-toggle').closest('.toggle-switch')`));
     assert(await evaluate(`!!document.getElementById('battery-alert-toggle').closest('.toggle-switch')`));
+    assert.equal(await evaluate(`document.querySelectorAll('#battery-alert-level-list .battery-alert-level-chip').length`),2);
+    assert(await evaluate(`document.getElementById('battery-alert-controls').disabled`));
     assert(await evaluate(`!!document.querySelector('.ns-push-panel > .ns-toggle-row .toggle-switch')`));
     await poll(()=>evaluate(`document.getElementById('android-notification-access-btn').textContent!=='检查'`));
     await evaluate(`(async()=>{qa.access=false;await NotificationUI.refreshSettings();qa.savedName=document.getElementById('settings-device-name-input').value;document.getElementById('settings-device-name-input').value='Unsaved QA name';qa.oldKeep=document.getElementById('background-keep-running-toggle').checked;document.getElementById('background-keep-running-toggle').checked=!qa.oldKeep;qa.pushNode=document.querySelector('#android-notification-settings input');qa.nameNode=document.getElementById('settings-device-name-input');})()`);
@@ -251,10 +253,18 @@ async function main() {
     await click('#android-permissions-btn');
     await evaluate('document.getElementById("background-start-on-boot-toggle").checked = true');
     await evaluate('document.getElementById("battery-alert-toggle").checked = true');
+    await evaluate(`document.getElementById('battery-alert-toggle').dispatchEvent(new Event('change'));document.getElementById('battery-alert-interval-input').value='12';document.getElementById('battery-alert-repeat-input').value='4';`);
+    await evaluate(`window.qaOriginalPrompt=window.prompt;window.prompt=()=> '25';`);
+    await click('#battery-alert-add-level-btn');
+    await click('#battery-alert-level-list [data-level="50"]');
+    await evaluate(`window.prompt=window.qaOriginalPrompt;delete window.qaOriginalPrompt;`);
     await click('#save-permissions-btn'); await expectPage('#settings');
     assert.equal((await state()).toast, '保存成功');
     assert.equal(await evaluate('qa.background.start_on_boot'), true);
     assert.equal(await evaluate('qa.background.battery_alert_enabled'), true);
+    assert.equal(await evaluate('qa.background.battery_alert_interval_seconds'), 12);
+    assert.equal(await evaluate('qa.background.battery_alert_repeat_count'), 4);
+    assert.deepEqual(await evaluate('qa.background.battery_alert_levels'), [25,100]);
     await screenshot('permissions-save-success');
     passed.push('Background and battery-alert changes save with visible success feedback');
     await click('.ns-app-picker-row');

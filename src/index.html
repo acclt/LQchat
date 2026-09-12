@@ -115,9 +115,25 @@
                             </label>
                             <div id="notification-permission-hint" class="setting-hint"></div>
                         </div>
-                        <div class="setting-item android-permission-row android-only">
-                            <span class="android-permission-copy"><strong>手机电量提示</strong></span>
+                        <div class="setting-item android-permission-row android-battery-alert-row android-only" id="battery-alert-setting">
+                            <span class="android-permission-copy"><strong>手机电量提醒</strong></span>
                             <label class="toggle-switch"><input type="checkbox" id="battery-alert-toggle"><span class="toggle-slider"></span></label>
+                            <fieldset id="battery-alert-controls" class="battery-alert-controls">
+                                <div class="battery-alert-timing">
+                                    <label for="battery-alert-interval-input">提醒间隔</label>
+                                    <span class="battery-alert-number"><input type="number" id="battery-alert-interval-input" class="no-spinner" inputmode="numeric" min="1" max="60" value="5" aria-label="提醒间隔，秒"><span>秒</span></span>
+                                    <label for="battery-alert-repeat-input">提醒次数</label>
+                                    <span class="battery-alert-number"><input type="number" id="battery-alert-repeat-input" class="no-spinner" inputmode="numeric" min="1" max="10" value="3" aria-label="提醒次数"><span>次</span></span>
+                                </div>
+                                <div class="battery-alert-level-row">
+                                    <div id="battery-alert-level-list" class="battery-alert-level-list" aria-label="提醒电量">
+                                        <button type="button" class="battery-alert-level-chip" data-level="50" aria-label="删除 50% 提醒">50% <span aria-hidden="true">×</span></button>
+                                        <button type="button" class="battery-alert-level-chip" data-level="100" aria-label="删除 100% 提醒">100% <span aria-hidden="true">×</span></button>
+                                    </div>
+                                    <button type="button" id="battery-alert-add-level-btn" class="battery-alert-add-level">＋添加</button>
+                                </div>
+                                <div id="battery-alert-validation" class="setting-hint battery-alert-validation" role="status"></div>
+                            </fieldset>
                         </div>
                         <div class="setting-item android-permission-row android-only">
                             <span class="android-permission-copy"><strong>允许接收其他设备推送</strong></span>

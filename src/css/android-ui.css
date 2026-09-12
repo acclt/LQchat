@@ -1275,6 +1275,107 @@ body.android-app .android-permission-row:last-child {
   border-bottom: 0;
 }
 
+body.android-app .android-battery-alert-row {
+  align-items: start;
+}
+
+body.android-app .android-battery-alert-row > .android-permission-copy,
+body.android-app .android-battery-alert-row > .toggle-switch {
+  align-self: center;
+}
+
+body.android-app .battery-alert-controls {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  margin: 2px 0 0;
+  padding: 0;
+  border: 0;
+  transition: opacity 120ms ease;
+}
+
+body.android-app .battery-alert-controls:disabled {
+  opacity: .45;
+}
+
+body.android-app .battery-alert-timing {
+  display: grid;
+  grid-template-columns: auto minmax(64px, 1fr) auto minmax(64px, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: var(--android-muted);
+  font-size: 12px;
+}
+
+body.android-app .battery-alert-number {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--android-ink);
+}
+
+body.android-app .battery-alert-number input {
+  width: 100%;
+  min-width: 42px;
+  height: 36px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  border: 1px solid var(--android-line);
+  border-radius: 10px;
+  color: var(--android-ink);
+  background: var(--android-bg);
+  font-size: 13px;
+  text-align: center;
+}
+
+body.android-app .battery-alert-level-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+body.android-app .battery-alert-level-list {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+body.android-app .battery-alert-level-chip,
+body.android-app .battery-alert-add-level {
+  min-height: 36px;
+  box-sizing: border-box;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 10px;
+  color: var(--android-purple);
+  background: var(--android-purple-soft);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+body.android-app .battery-alert-level-chip span {
+  margin-left: 3px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+body.android-app .battery-alert-add-level {
+  flex: 0 0 auto;
+}
+
+body.android-app .battery-alert-validation {
+  margin: -4px 0 0;
+  color: #a93449;
+}
+
+body.android-app .battery-alert-validation:empty {
+  display: none;
+}
+
 body.android-app .android-permission-copy {
   min-width: 0;
   display: grid;

@@ -16,7 +16,7 @@ import java.util.UUID
 import org.json.JSONObject
 import kotlin.math.roundToInt
 
-/** Event-driven 50%/100% battery alerts owned by the existing foreground service. */
+/** Event-driven configurable battery alerts owned by the existing foreground service. */
 class BatteryAlertController(
     context: Context,
     private val notificationManager: NotificationManager,
@@ -25,26 +25,28 @@ class BatteryAlertController(
 ) {
     companion object {
         internal const val CHANNEL_ID = "lanchat_battery_alerts_v1"
-        internal const val REMINDER_INTERVAL_MS = 5_000L
-        internal const val REMINDER_COUNT = 3
-        internal const val STALE_SEQUENCE_MS = 60_000L
+        internal const val DEFAULT_REMINDER_INTERVAL_MS = 5_000L
+        internal const val DEFAULT_REMINDER_COUNT = 3
+        internal const val STALE_SEQUENCE_GRACE_MS = 60_000L
         private const val PREFS = "lanchat_battery_alert_state"
         private const val LAST_LEVEL = "last_level"
         private const val ACTIVE_THRESHOLD = "active_threshold"
         private const val SENT_COUNT = "sent_count"
         private const val STARTED_AT = "started_at"
         private const val NEXT_AT = "next_at"
-        private val TARGET_LEVELS = setOf(50, 100)
-        private val NOTIFICATION_IDS = intArrayOf(9_251, 9_252, 9_253)
+        private const val NOTIFICATION_ID_BASE = 9_251
+        private const val MAX_REMINDER_COUNT = 10
 
-        /** Returns the crossed display threshold; 100% wins if a large jump crosses both. */
-        internal fun thresholdFor(previousLevel: Int, currentLevel: Int): Int? {
-            if (currentLevel >= 100 && previousLevel < 100) return 100
-            if (previousLevel < 0) return if (currentLevel == 50) 50 else null
-            val crossedFifty =
-                (previousLevel < 50 && currentLevel >= 50) ||
-                    (previousLevel > 50 && currentLevel <= 50)
-            return if (crossedFifty) 50 else null
+        /** Returns the crossed threshold nearest the current level. */
+        internal fun thresholdFor(previousLevel: Int, currentLevel: Int, targetLevels: Set<Int>): Int? {
+            if (previousLevel < 0) return currentLevel.takeIf(targetLevels::contains)
+            if (currentLevel > previousLevel) {
+                return targetLevels.filter { it > previousLevel && it <= currentLevel }.maxOrNull()
+            }
+            if (currentLevel < previousLevel) {
+                return targetLevels.filter { it < previousLevel && it >= currentLevel }.minOrNull()
+            }
+            return null
         }
 
         internal fun shouldPush(settings: JSONObject): Boolean =
@@ -63,10 +65,14 @@ class BatteryAlertController(
         }
     }
 
-    fun refresh() {
+    fun refresh(resetPendingSequence: Boolean = false) {
         if (!BackgroundRuntimeSettings.batteryAlertEnabled(appContext)) {
             stop(clearState = true)
             return
+        }
+        if (resetPendingSequence) {
+            clearSequence()
+            cancelAlertNotifications()
         }
         ensureNotificationChannel()
         if (!receiverRegistered) {
@@ -108,15 +114,18 @@ class BatteryAlertController(
         val previousLevel = prefs.getInt(LAST_LEVEL, -1)
         prefs.edit().putInt(LAST_LEVEL, currentLevel).commit()
 
-        val threshold = thresholdFor(previousLevel, currentLevel) ?: return
+        val threshold = thresholdFor(
+            previousLevel,
+            currentLevel,
+            BackgroundRuntimeSettings.batteryAlertLevels(appContext),
+        ) ?: return
         val activeThreshold = prefs.getInt(ACTIVE_THRESHOLD, 0)
         if (activeThreshold == threshold) return
-        if (activeThreshold != 0 && threshold != 100) return
         beginSequence(threshold)
     }
 
     private fun beginSequence(threshold: Int) {
-        if (threshold !in TARGET_LEVELS) return
+        if (threshold !in BackgroundRuntimeSettings.batteryAlertLevels(appContext)) return
         handler.removeCallbacks(reminderRunnable)
         cancelAlertNotifications()
         val now = System.currentTimeMillis()
@@ -132,10 +141,13 @@ class BatteryAlertController(
     private fun resumePendingSequence() {
         handler.removeCallbacks(reminderRunnable)
         val threshold = prefs.getInt(ACTIVE_THRESHOLD, 0)
-        if (threshold !in TARGET_LEVELS) return
+        if (threshold !in BackgroundRuntimeSettings.batteryAlertLevels(appContext)) {
+            clearSequence()
+            return
+        }
         val now = System.currentTimeMillis()
         val startedAt = prefs.getLong(STARTED_AT, 0L)
-        if (startedAt <= 0L || now < startedAt || now - startedAt > STALE_SEQUENCE_MS) {
+        if (isStaleSequence(startedAt, now)) {
             clearSequence()
             return
         }
@@ -149,28 +161,33 @@ class BatteryAlertController(
             return
         }
         val threshold = prefs.getInt(ACTIVE_THRESHOLD, 0)
-        if (threshold !in TARGET_LEVELS) return
+        if (threshold !in BackgroundRuntimeSettings.batteryAlertLevels(appContext)) {
+            clearSequence()
+            return
+        }
         val now = System.currentTimeMillis()
         val startedAt = prefs.getLong(STARTED_AT, 0L)
-        if (startedAt <= 0L || now < startedAt || now - startedAt > STALE_SEQUENCE_MS) {
+        if (isStaleSequence(startedAt, now)) {
             clearSequence()
             return
         }
 
         val sentCount = prefs.getInt(SENT_COUNT, 0)
-        if (sentCount >= REMINDER_COUNT) {
+        val reminderCount = BackgroundRuntimeSettings.batteryAlertRepeatCount(appContext)
+        if (sentCount >= reminderCount) {
             clearSequence()
             return
         }
         postReminder(threshold, sentCount)
         val nextCount = sentCount + 1
-        if (nextCount >= REMINDER_COUNT) {
+        if (nextCount >= reminderCount) {
             clearSequence()
             return
         }
-        val nextAt = now + REMINDER_INTERVAL_MS
+        val reminderIntervalMs = BackgroundRuntimeSettings.batteryAlertIntervalMs(appContext)
+        val nextAt = now + reminderIntervalMs
         prefs.edit().putInt(SENT_COUNT, nextCount).putLong(NEXT_AT, nextAt).commit()
-        handler.postDelayed(reminderRunnable, REMINDER_INTERVAL_MS)
+        handler.postDelayed(reminderRunnable, reminderIntervalMs)
     }
 
     private fun postReminder(threshold: Int, reminderIndex: Int) {
@@ -189,7 +206,7 @@ class BatteryAlertController(
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .build()
         runCatching {
-            notificationManager.notify(NOTIFICATION_IDS[reminderIndex], notification)
+            notificationManager.notify(NOTIFICATION_ID_BASE + reminderIndex, notification)
             pushReminder(threshold, reminderIndex)
         }.onFailure {
             android.util.Log.w("BatteryAlert", "发送电量提醒失败", it)
@@ -230,7 +247,13 @@ class BatteryAlertController(
     }
 
     private fun cancelAlertNotifications() {
-        NOTIFICATION_IDS.forEach(notificationManager::cancel)
+        repeat(MAX_REMINDER_COUNT) { notificationManager.cancel(NOTIFICATION_ID_BASE + it) }
+    }
+
+    private fun isStaleSequence(startedAt: Long, now: Long): Boolean {
+        val ttl = BackgroundRuntimeSettings.batteryAlertIntervalMs(appContext) *
+            BackgroundRuntimeSettings.batteryAlertRepeatCount(appContext) + STALE_SEQUENCE_GRACE_MS
+        return startedAt <= 0L || now < startedAt || now - startedAt > ttl
     }
 
     private fun ensureNotificationChannel() {
@@ -241,7 +264,7 @@ class BatteryAlertController(
                 "电量提醒",
                 NotificationManager.IMPORTANCE_HIGH,
             ).apply {
-                description = "手机电量达到 50% 或 100% 时提醒"
+                description = "手机电量达到设定值时提醒"
                 enableVibration(true)
                 setShowBadge(true)
                 lockscreenVisibility = Notification.VISIBILITY_PRIVATE

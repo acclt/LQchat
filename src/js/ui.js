@@ -2635,6 +2635,73 @@ function initSettings() {
   const backgroundStartOnBootToggle = document.getElementById("background-start-on-boot-toggle");
   const backgroundExcludeRecentsToggle = document.getElementById("background-exclude-recents-toggle");
   const batteryAlertToggle = document.getElementById("battery-alert-toggle");
+  const batteryAlertControls = document.getElementById("battery-alert-controls");
+  const batteryAlertIntervalInput = document.getElementById("battery-alert-interval-input");
+  const batteryAlertRepeatInput = document.getElementById("battery-alert-repeat-input");
+  const batteryAlertLevelList = document.getElementById("battery-alert-level-list");
+  const batteryAlertAddLevelBtn = document.getElementById("battery-alert-add-level-btn");
+  const batteryAlertValidation = document.getElementById("battery-alert-validation");
+  let batteryAlertLevels = [50, 100];
+
+  const renderBatteryAlertLevels = () => {
+    if (!batteryAlertLevelList) return;
+    batteryAlertLevelList.replaceChildren(...batteryAlertLevels.map((level) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "battery-alert-level-chip";
+      chip.dataset.level = String(level);
+      chip.setAttribute("aria-label", `删除 ${level}% 提醒`);
+      chip.append(document.createTextNode(`${level}% `));
+      const remove = document.createElement("span");
+      remove.setAttribute("aria-hidden", "true");
+      remove.textContent = "×";
+      chip.append(remove);
+      return chip;
+    }));
+  };
+  const setBatteryAlertControlsEnabled = () => {
+    if (batteryAlertControls) batteryAlertControls.disabled = !batteryAlertToggle?.checked;
+  };
+  const showBatteryAlertValidation = (message = "") => {
+    if (batteryAlertValidation) batteryAlertValidation.textContent = message;
+  };
+
+  batteryAlertToggle?.addEventListener("change", () => {
+    setBatteryAlertControlsEnabled();
+    showBatteryAlertValidation();
+  });
+  batteryAlertLevelList?.addEventListener("click", (event) => {
+    const chip = event.target.closest(".battery-alert-level-chip");
+    if (!chip || !batteryAlertLevelList.contains(chip)) return;
+    if (batteryAlertLevels.length <= 1) {
+      showBatteryAlertValidation("至少保留一个提醒电量");
+      return;
+    }
+    batteryAlertLevels = batteryAlertLevels.filter((level) => level !== Number(chip.dataset.level));
+    showBatteryAlertValidation();
+    renderBatteryAlertLevels();
+  });
+  batteryAlertAddLevelBtn?.addEventListener("click", () => {
+    if (batteryAlertLevels.length >= 10) {
+      showBatteryAlertValidation("最多添加 10 个提醒电量");
+      return;
+    }
+    const value = prompt("请输入提醒电量（1～100）");
+    if (value === null) return;
+    const trimmed = value.trim();
+    const level = Number(trimmed);
+    if (!/^\d{1,3}$/.test(trimmed) || !Number.isInteger(level) || level < 1 || level > 100) {
+      showBatteryAlertValidation("提醒电量必须是 1～100 的整数");
+      return;
+    }
+    if (batteryAlertLevels.includes(level)) {
+      showBatteryAlertValidation(`${level}% 已存在`);
+      return;
+    }
+    batteryAlertLevels = [...batteryAlertLevels, level].sort((a, b) => a - b);
+    showBatteryAlertValidation();
+    renderBatteryAlertLevels();
+  });
 
   // Android 端隐藏数据库路径配置
   const isAndroid = !!window.__TAURI__ &&
@@ -2862,6 +2929,17 @@ function initSettings() {
             backgroundStartOnBootToggle.checked = !!background.start_on_boot;
             backgroundExcludeRecentsToggle.checked = !!background.exclude_from_recents;
             batteryAlertToggle.checked = !!background.battery_alert_enabled;
+            batteryAlertIntervalInput.value = String(background.battery_alert_interval_seconds ?? 5);
+            batteryAlertRepeatInput.value = String(background.battery_alert_repeat_count ?? 3);
+            batteryAlertLevels = Array.isArray(background.battery_alert_levels) && background.battery_alert_levels.length
+              ? [...new Set(background.battery_alert_levels.map(Number))]
+                  .filter((level) => Number.isInteger(level) && level >= 1 && level <= 100)
+                  .sort((a, b) => a - b)
+              : [50, 100];
+            if (!batteryAlertLevels.length) batteryAlertLevels = [50, 100];
+            renderBatteryAlertLevels();
+            setBatteryAlertControlsEnabled();
+            showBatteryAlertValidation();
           }
           initialNotifications = await window.__TAURI__.core.invoke("get_notifications_enabled").catch(() => true);
           notificationToggle.checked = initialNotifications;
@@ -3017,6 +3095,19 @@ function initSettings() {
       const autoDl = autoDownloadToggle.checked;
       const notificationsEnabled = notificationToggle.checked;
       const batteryAlertEnabled = isAndroid && batteryAlertToggle.checked;
+      const batteryAlertIntervalSeconds = isAndroid ? Number(batteryAlertIntervalInput.value) : 5;
+      const batteryAlertRepeatCount = isAndroid ? Number(batteryAlertRepeatInput.value) : 3;
+      if (isAndroid && (!Number.isInteger(batteryAlertIntervalSeconds) || batteryAlertIntervalSeconds < 1 || batteryAlertIntervalSeconds > 60)) {
+        batteryAlertIntervalInput.focus();
+        throw new Error("提醒间隔必须是 1～60 秒的整数");
+      }
+      if (isAndroid && (!Number.isInteger(batteryAlertRepeatCount) || batteryAlertRepeatCount < 1 || batteryAlertRepeatCount > 10)) {
+        batteryAlertRepeatInput.focus();
+        throw new Error("提醒次数必须是 1～10 次的整数");
+      }
+      if (isAndroid && (!batteryAlertLevels.length || batteryAlertLevels.length > 10)) {
+        throw new Error("请设置 1～10 个提醒电量");
+      }
       const closeToTray = isWindowsDesktop ? closeToTrayToggle.checked : undefined;
       const autostartEnabled = isWindowsDesktop ? autostartToggle.checked : false;
       const nameChanged = isAndroid && deviceName !== initialName;
@@ -3025,6 +3116,9 @@ function initSettings() {
         start_on_boot: backgroundStartOnBootToggle.checked,
         exclude_from_recents: backgroundExcludeRecentsToggle.checked,
         battery_alert_enabled: batteryAlertEnabled,
+        battery_alert_interval_seconds: batteryAlertIntervalSeconds,
+        battery_alert_repeat_count: batteryAlertRepeatCount,
+        battery_alert_levels: batteryAlertLevels,
       } : null;
 
       // Permission timeouts must not leave a partially written configuration.
