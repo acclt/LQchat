@@ -192,6 +192,27 @@ body.android-app .share-dialog-content .cancel-btn:active {
   background: #e2d9fb;
 }
 
+body.android-app .confirm-dialog-overlay {
+  background: rgba(38, 31, 61, .28);
+}
+
+body.android-app .confirm-dialog-content {
+  background: var(--android-card);
+  border-color: rgba(143, 92, 229, .22);
+  color: var(--android-ink);
+  box-shadow: 0 20px 48px rgba(51, 43, 84, .2);
+}
+
+body.android-app .confirm-dialog-content p {
+  color: var(--android-ink);
+}
+
+body.android-app .confirm-btn-cancel {
+  background: #f3f4f8;
+  border-color: var(--android-line);
+  color: var(--android-muted);
+}
+
 body.android-app .share-dialog-content .cancel-btn:hover {
   color: var(--android-purple);
   background: var(--android-purple-soft);

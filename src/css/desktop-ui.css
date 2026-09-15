@@ -177,6 +177,10 @@ body.windows-app .theme-item label { color: var(--desktop-ink); }
 body.windows-app .theme-item:has(input:checked) { background: var(--desktop-soft); border-color: #cabbec; }
 body.windows-app .custom-peer-item { background: #fff; color: var(--desktop-ink); border-color: var(--desktop-line); }
 body.windows-app .message-action-toast { background: var(--desktop-ink); color: #fff; border: 0; }
+body.windows-app .confirm-dialog-overlay { background: #26203d47; }
+body.windows-app .confirm-dialog-content { background: #fff; border-color: var(--desktop-line); color: var(--desktop-ink); box-shadow: 0 20px 60px #332b541f; }
+body.windows-app .confirm-dialog-content p { color: var(--desktop-ink); }
+body.windows-app .confirm-btn-cancel { background: var(--desktop-bg); border-color: var(--desktop-line); color: var(--desktop-muted); }
 @media (max-width: 1000px) {
   body.windows-app .main-content, body.windows-app.chat-open .main-content { padding: 14px; gap: 14px; }
   body.windows-app .user-list-container, body.windows-app.chat-open .user-list-container { display: flex; flex: 0 0 258px; width: 258px; max-width: 258px; }

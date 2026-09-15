@@ -64,6 +64,63 @@ async function main() {
   assert.equal(home.hasPushSourcesButton, false, "Removed push-source button is still visible");
   await capture("android-home");
 
+  const dialogState = await evaluate(`(async () => {
+    showConfirm('确定要删除测试用户吗？', async () => {});
+    await new Promise(resolve => setTimeout(resolve, 180));
+    const dialog = document.querySelector('.confirm-dialog-content');
+    const rect = dialog.getBoundingClientRect();
+    const style = getComputedStyle(dialog);
+    const state = {
+      centerX: rect.x + rect.width / 2,
+      centerY: rect.y + rect.height / 2,
+      background: style.backgroundColor,
+      transform: style.transform
+    };
+    document.querySelector('.confirm-btn-cancel').click();
+    await showUserActionDialog('4060', '4060');
+    const panel = document.getElementById('user-mgmt-panel');
+    const panelStyle = getComputedStyle(panel);
+    state.managementAnimation = panelStyle.animationName;
+    state.managementBlur = panelStyle.backdropFilter;
+    document.getElementById('mgmt-cancel-btn').click();
+    return state;
+  })()`);
+  assert(Math.abs(dialogState.centerX - 180) < 2, "Android confirmation dialog is not horizontally centered");
+  assert(Math.abs(dialogState.centerY - 500) < 2, "Android confirmation dialog is not vertically centered");
+  assert.notEqual(dialogState.background, "rgb(40, 42, 54)", "Android confirmation dialog still uses the legacy dark theme");
+  assert.equal(dialogState.transform, "none", "Android confirmation dialog inherited the translated popIn transform");
+  assert.equal(dialogState.managementAnimation, "none", "Android management dialog still animates");
+  assert.equal(dialogState.managementBlur, "none", "Android management dialog still uses backdrop blur");
+
+  const chatSwitchState = await evaluate(`(async () => {
+    const originalInvoke = window.__TAURI__.core.invoke;
+    window.__TAURI__.core.invoke = async (command, args = {}) => {
+      if (command === 'get_chat_history_with_offset') {
+        const slow = args.peerId === 'iqoo';
+        await new Promise(resolve => setTimeout(resolve, slow ? 180 : 20));
+        return [{ id: slow ? 8101 : 8102, msg_type: 'text', content: slow ? 'IQOO history' : 'REDM history', from_id: args.peerId, timestamp: slow ? 1 : 2 }];
+      }
+      return originalInvoke(command, args);
+    };
+    openChat({ id: 'iqoo', name: 'IQOO', addr: '192.168.5.10:8888' });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    openChat({ id: 'redm', name: 'REDM', addr: '192.168.5.11:8888' });
+    await new Promise(resolve => setTimeout(resolve, 260));
+    const state = {
+      title: document.getElementById('chat-with-name').textContent,
+      text: document.getElementById('chat-messages').textContent,
+      messageCount: document.querySelectorAll('#chat-messages .message').length
+    };
+    window.__TAURI__.core.invoke = originalInvoke;
+    performCloseChatUI();
+    history.replaceState({}, '', location.pathname + '?android-preview=1');
+    return state;
+  })()`);
+  assert.equal(chatSwitchState.title, "REDM", "The latest selected peer title was not retained");
+  assert.equal(chatSwitchState.messageCount, 1, "The chat switch rendered an unexpected number of messages");
+  assert.match(chatSwitchState.text, /REDM history/, "The latest selected peer history was not rendered");
+  assert.doesNotMatch(chatSwitchState.text, /IQOO history/, "A stale chat load overwrote the latest selected peer");
+
   const settings = await evaluate(`(async () => {
     document.getElementById('android-settings-btn').click();
     await new Promise(resolve => setTimeout(resolve, 100));

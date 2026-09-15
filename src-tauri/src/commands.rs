@@ -2234,6 +2234,18 @@ pub fn ensure_windows_notification_identity() -> Result<(), String> {
         .parent()
         .map(PathBuf::from)
         .ok_or_else(|| "LQChat 路径缺少父目录".to_string())?;
+    let launch_script = working_directory.join("Start-LQChat.cmd");
+    let shortcut_icon = working_directory.join("LQChat-shortcut.ico");
+    let launch_target = if launch_script.is_file() {
+        &launch_script
+    } else {
+        &executable
+    };
+    let icon_target = if shortcut_icon.is_file() {
+        &shortcut_icon
+    } else {
+        &executable
+    };
     let app_data = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .ok_or_else(|| "Windows APPDATA 目录不可用".to_string())?;
@@ -2242,11 +2254,19 @@ pub fn ensure_windows_notification_identity() -> Result<(), String> {
         .join("Windows")
         .join("Start Menu")
         .join("Programs");
-    let shortcut = shortcut_dir.join("LQChat.lnk");
-    let legacy_shortcut = shortcut_dir.join("LANChat.lnk");
-    if let Some(parent) = shortcut.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("创建开始菜单目录失败: {error}"))?;
+    let start_menu_shortcut = shortcut_dir.join("LQChat.lnk");
+    let mut shortcuts = vec![start_menu_shortcut.clone()];
+    // 只有安装包资源存在时才接管桌面快捷方式；开发构建不能覆盖用户桌面入口。
+    if launch_script.is_file() {
+        if let Some(desktop_dir) = dirs::desktop_dir() {
+            shortcuts.push(desktop_dir.join("LQChat.lnk"));
+        }
+    }
+    for shortcut in &shortcuts {
+        if let Some(parent) = shortcut.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("创建快捷方式目录失败: {error}"))?;
+        }
     }
 
     let com_result = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
@@ -2255,15 +2275,17 @@ pub fn ensure_windows_notification_identity() -> Result<(), String> {
         return Err(format!("初始化 Windows Shell 失败: {com_result:?}"));
     }
 
-    let create_shortcut = || -> windows::core::Result<()> {
+    let create_shortcut = |shortcut: &std::path::Path| -> windows::core::Result<()> {
         unsafe {
             let shell_link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
-            shell_link.SetPath(&HSTRING::from(executable.to_string_lossy().as_ref()))?;
+            shell_link.SetPath(&HSTRING::from(launch_target.to_string_lossy().as_ref()))?;
             shell_link.SetWorkingDirectory(&HSTRING::from(
                 working_directory.to_string_lossy().as_ref(),
             ))?;
             shell_link.SetDescription(&HSTRING::from("LQChat 局域网聊天"))?;
-            shell_link.SetIconLocation(&HSTRING::from(executable.to_string_lossy().as_ref()), 0)?;
+            shell_link
+                .SetIconLocation(&HSTRING::from(icon_target.to_string_lossy().as_ref()), 0)?;
+            shell_link.SetShowCmd(windows::Win32::UI::WindowsAndMessaging::SW_SHOWMINNOACTIVE)?;
 
             let property_store: IPropertyStore = shell_link.cast()?;
             let app_id_value = PROPVARIANT::from(WINDOWS_NOTIFICATION_APP_ID);
@@ -2274,13 +2296,18 @@ pub fn ensure_windows_notification_identity() -> Result<(), String> {
             persist_file.Save(&HSTRING::from(shortcut.to_string_lossy().as_ref()), true)?;
             Ok(())
         }
-    }();
+    };
+
+    let create_result = shortcuts
+        .iter()
+        .try_for_each(|shortcut| create_shortcut(shortcut));
 
     if should_uninitialize {
         unsafe { CoUninitialize() };
     }
-    create_shortcut.map_err(|error| format!("注册 LQChat 开始菜单通知身份失败: {error}"))?;
-    if legacy_shortcut != shortcut && legacy_shortcut.is_file() {
+    create_result.map_err(|error| format!("创建 LQChat 快捷方式失败: {error}"))?;
+    let legacy_shortcut = shortcut_dir.join("LANChat.lnk");
+    if legacy_shortcut != start_menu_shortcut && legacy_shortcut.is_file() {
         let _ = std::fs::remove_file(legacy_shortcut);
     }
     Ok(())

@@ -34,6 +34,17 @@ async function main(){
     await evaluate(`[...document.body.children].find(n=>n.textContent.startsWith('测试：新增通知'))?.remove()`);
     if(!baseline){assert(await visible('.header'));assert(await visible('#settings-btn'));assert(await visible('#theme-btn'));assert(await visible('#add-peer-btn'));}
     await shot('home-1200');
+    if(!baseline){
+      await evaluate(`showConfirm('确定要删除测试用户吗？',async()=>{})`);
+      await sleep(180);
+      const confirmState=await evaluate(`(()=>{const d=document.querySelector('.confirm-dialog-content'),r=d.getBoundingClientRect(),s=getComputedStyle(d);return{x:r.x,y:r.y,width:r.width,height:r.height,background:s.backgroundColor,transform:s.transform};})()`);
+      assert(Math.abs((confirmState.x+confirmState.width/2)-600)<2,'Confirmation dialog must be horizontally centered');
+      assert(Math.abs((confirmState.y+confirmState.height/2)-410)<2,'Confirmation dialog must be vertically centered');
+      assert.notEqual(confirmState.background,'rgb(40, 42, 54)','Confirmation dialog must not use the legacy dark theme');
+      assert.equal(confirmState.transform,'none','Confirmation dialog must not inherit the translated popIn transform');
+      await shot('confirm-1200');
+      await click('.confirm-btn-cancel');
+    }
     await click('#settings-btn');
     await poll(()=>evaluate(`!document.getElementById('save-settings-btn').disabled`));
     await shot('settings-1200');

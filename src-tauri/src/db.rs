@@ -2,6 +2,9 @@ use crate::utils::generate_random_name;
 use sqlx::{sqlite::SqlitePool, Pool, Sqlite};
 use std::path::PathBuf;
 
+pub const CHAT_RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
+pub const CHAT_RETENTION_SWEEP_SECS: u64 = 24 * 60 * 60;
+
 #[cfg(feature = "desktop")]
 use tauri::AppHandle;
 #[cfg(feature = "desktop")]
@@ -215,7 +218,8 @@ pub async fn init_db_with_path(app_dir: PathBuf) -> Result<Pool<Sqlite>, sqlx::E
             msg_type TEXT,
             timestamp INTEGER,
             file_path TEXT,
-            file_status TEXT
+            file_status TEXT,
+            stored_at INTEGER NOT NULL DEFAULT (unixepoch())
         )",
     )
     .execute(&pool)
@@ -240,6 +244,38 @@ pub async fn init_db_with_path(app_dir: PathBuf) -> Result<Pool<Sqlite>, sqlx::E
     let _ = sqlx::query("ALTER TABLE messages ADD COLUMN sender_msg_id TEXT")
         .execute(&pool)
         .await;
+
+    // Chat retention uses the local insertion time instead of the sender supplied timestamp.
+    // Older databases are backfilled once, while a trigger covers every existing INSERT path.
+    let _ = sqlx::query("ALTER TABLE messages ADD COLUMN stored_at INTEGER")
+        .execute(&pool)
+        .await;
+    sqlx::query(
+        "UPDATE messages
+         SET stored_at = COALESCE(timestamp, unixepoch())
+         WHERE stored_at IS NULL",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "CREATE TRIGGER IF NOT EXISTS messages_set_stored_at
+         AFTER INSERT ON messages
+         WHEN NEW.stored_at IS NULL
+         BEGIN
+             UPDATE messages SET stored_at = unixepoch() WHERE id = NEW.id;
+         END",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_messages_stored_at ON messages(stored_at)")
+        .execute(&pool)
+        .await?;
+
+    if cfg!(target_os = "android") {
+        cleanup_expired_chat_messages(&pool)
+            .await
+            .map_err(sqlx::Error::Protocol)?;
+    }
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS settings (
@@ -340,6 +376,45 @@ pub async fn init_db_with_path(app_dir: PathBuf) -> Result<Pool<Sqlite>, sqlx::E
     }
 
     Ok(pool)
+}
+
+/// Delete chat rows older than seven local days. File contents and Android URI permissions
+/// intentionally remain untouched; pending and failed rows follow the same retention rule.
+pub async fn cleanup_expired_chat_messages(pool: &sqlx::Pool<sqlx::Sqlite>) -> Result<u64, String> {
+    let cutoff = chrono::Utc::now().timestamp() - CHAT_RETENTION_SECS;
+    let result = sqlx::query(
+        "DELETE FROM messages
+         WHERE COALESCE(stored_at, timestamp, 0) < ?",
+    )
+    .bind(cutoff)
+    .execute(pool)
+    .await
+    .map_err(|error| format!("清理过期聊天记录失败: {error}"))?;
+    let removed = result.rows_affected();
+    if removed > 0 {
+        println!("[DB] 已清理 {removed} 条超过 7 天的聊天记录");
+    }
+    Ok(removed)
+}
+
+pub async fn run_chat_retention(
+    pool: sqlx::Pool<sqlx::Sqlite>,
+    cancellation: tokio_util::sync::CancellationToken,
+) -> Result<(), String> {
+    let mut interval =
+        tokio::time::interval(std::time::Duration::from_secs(CHAT_RETENTION_SWEEP_SECS));
+    // Initialization already performs a sweep, so the first interval tick is skipped.
+    interval.tick().await;
+    loop {
+        tokio::select! {
+            _ = cancellation.cancelled() => return Ok(()),
+            _ = interval.tick() => {
+                if let Err(error) = cleanup_expired_chat_messages(&pool).await {
+                    eprintln!("[DB] {error}; 下个清理周期将重试");
+                }
+            }
+        }
+    }
 }
 
 // ==================== 文件相关的数据库函数 ====================
@@ -729,7 +804,10 @@ pub async fn get_pending_file_by_path(
     println!("[DB] 查询待接收文件: 路径模式={}", path_pattern);
 
     let row = sqlx::query_as::<_, (String, String)>(
-        "SELECT file_path, content FROM messages WHERE file_path LIKE ? AND file_status = 'pending'"
+        "SELECT file_path, content FROM messages
+         WHERE file_path LIKE ?
+           AND file_status = 'pending'
+           AND COALESCE(stored_at, timestamp, 0) >= unixepoch() - 604800",
     )
     .bind(path_pattern)
     .fetch_optional(pool)
@@ -866,7 +944,12 @@ pub async fn get_pending_messages(
     receiver_id: &str,
 ) -> Result<Vec<(i64, String, String, i64, Option<String>, Option<i64>)>, String> {
     let rows = sqlx::query_as::<_, (i64, String, String, i64, Option<String>, Option<i64>)>(
-        "SELECT id, content, msg_type, timestamp, file_path, file_size FROM messages WHERE receiver_id = ? AND status = 'pending' ORDER BY timestamp ASC"
+        "SELECT id, content, msg_type, timestamp, file_path, file_size
+         FROM messages
+         WHERE receiver_id = ?
+           AND status = 'pending'
+           AND COALESCE(stored_at, timestamp, 0) >= unixepoch() - 604800
+         ORDER BY timestamp ASC",
     )
     .bind(receiver_id)
     .fetch_all(pool)
@@ -969,10 +1052,11 @@ pub async fn get_chat_history_with_offset(
          FROM (
             SELECT id, sender_id, receiver_id, content, msg_type, timestamp, file_path, file_status, file_size, sender_msg_id, status 
             FROM messages 
-            WHERE 
+            WHERE COALESCE(stored_at, timestamp, 0) >= unixepoch() - 604800 AND (
                 (sender_id = ? AND receiver_id = ?) OR 
                 (sender_id = ? AND (receiver_id = ? OR receiver_id IS NULL)) OR
                 (sender_id = 'me' AND receiver_id = ?)
+            )
             ORDER BY timestamp DESC 
             LIMIT ? OFFSET ?
          ) 

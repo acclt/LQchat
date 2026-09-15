@@ -339,6 +339,11 @@ impl CoreRuntime {
             if let Some(store) = supervisor_peer_manager.persistence() {
                 tasks.spawn(store.run(supervisor_cancellation.child_token()));
             }
+            #[cfg(target_os = "android")]
+            tasks.spawn(crate::db::run_chat_retention(
+                supervisor_pool.clone(),
+                supervisor_cancellation.child_token(),
+            ));
             tasks.spawn(crate::network::discovery::run_listener(
                 udp_listener,
                 port,

@@ -110,7 +110,8 @@ async function renderPage() {
 
     // 如果当前正好在这个用户的聊天界面里，静默刷新一下历史记录即可
     if (window.currentChatPeer && window.currentChatPeer.id === peerId) {
-      await loadChatHistory(peerId, true);
+      const renderSession = window.chatRenderController?.snapshot(peerId);
+      await loadChatHistory(peerId, true, renderSession);
     }
   });
 
@@ -196,16 +197,37 @@ async function renderPage() {
 
 }
 
+let peerRefreshInFlight = false;
+let lastPeerSnapshot = "";
+
 async function refreshPeerListNow() {
+  if (peerRefreshInFlight) return;
+  peerRefreshInFlight = true;
+  try {
     const peers = await apiGetPeers();
     if (!peers) return;
+    const peerSnapshot = JSON.stringify(peers.map((peer) => [
+      peer.id,
+      peer.name,
+      peer.addr,
+      Boolean(peer.is_offline),
+    ]));
+    if (peerSnapshot === lastPeerSnapshot) return peers;
+    lastPeerSnapshot = peerSnapshot;
     window.NotificationUI?.onPeers(peers);
 
     const apiPeerIds = new Set(peers.map((p) => p.id));
+    const existingItems = Array.from(document.querySelectorAll("#user-list li"));
+    const existingById = new Map(existingItems.map((item) => [item.dataset.id, item]));
+    let needsSort = false;
 
     for (const peer of peers) {
       // 更新左侧列表 UI
-      addUserToList(peer.id, peer.name, peer.addr, peer.is_offline);
+      const existing = existingById.get(peer.id);
+      if (!existing || existing.classList.contains("offline") !== Boolean(peer.is_offline)) {
+        needsSort = true;
+      }
+      void addUserToList(peer.id, peer.name, peer.addr, peer.is_offline, true);
 
       // 如果该用户正处于聊天窗口中，实时同步他的最新 IP 和名字
       if (window.currentChatPeer && window.currentChatPeer.id === peer.id) {
@@ -226,28 +248,33 @@ async function refreshPeerListNow() {
 
     const summary = document.getElementById("android-peer-summary");
     if (summary) {
-      summary.textContent = `当前 ${peers.length} 台设备`;
+      const nextSummary = `当前 ${peers.length} 台设备`;
+      if (summary.textContent !== nextSummary) summary.textContent = nextSummary;
     }
     const emptyState = document.getElementById("android-chat-empty");
     if (emptyState) emptyState.hidden = peers.length > 0;
 
     // 处理“自动移除”：如果 DOM 中的用户 ID 不在 API 列表中，说明该用户被删除了
-    const userListItems = document.querySelectorAll("#user-list li");
-    userListItems.forEach((li) => {
+    existingItems.forEach((li) => {
       const domId = li.dataset.id;
       if (!apiPeerIds.has(domId)) {
         console.log(`[JS-App] 用户 ${domId} 不在列表，执行移除`);
         li.remove();
+        needsSort = true;
       }
     });
 
-    sortUserList();
+    if (needsSort) sortUserList();
     return peers;
+  } finally {
+    peerRefreshInFlight = false;
+  }
 }
 
 async function startPeerPolling() {
   await refreshPeerListNow();
-  setInterval(refreshPeerListNow, 1000);
+  const pollInterval = 1000;
+  setInterval(() => void refreshPeerListNow(), pollInterval);
 }
 
 function initAndroidSaveBars() {
@@ -461,24 +488,29 @@ function formatFileSize(bytes) {
 async function startMessagePolling() {
   const pollInterval = 1000;
   window.messagePollingEnabled = true;
+  let pollInFlight = false;
 
   const checkNewMessages = async () => {
-    if (!window.messagePollingEnabled || !window.currentChatPeer) return;
+    if (!window.messagePollingEnabled || !window.currentChatPeer || pollInFlight) return;
+    pollInFlight = true;
 
     try {
       const chatMessages = document.getElementById("chat-messages");
       if (!chatMessages) return;
+      const peerId = window.currentChatPeer.id;
+      const renderSession = window.chatRenderController?.snapshot(peerId);
 
-      // 1. 判断当前滚动条是否在底部
-      const isAtBottom = chatMessages.scrollHeight - chatMessages.scrollTop -
-          chatMessages.clientHeight < 150;
+      const shouldFollow = window.chatRenderController?.followLatest ?? true;
 
       // 2. 获取最新消息
       const latestMessages = await apiGetChatHistory(
-        window.currentChatPeer.id,
+        peerId,
         20,
         0,
       );
+      if (window.chatRenderController
+        ? !window.chatRenderController.isCurrent(renderSession)
+        : window.currentChatPeer?.id !== peerId) return;
       if (!latestMessages || latestMessages.length === 0) return;
 
       const newMessages = latestMessages.filter((msg) =>
@@ -497,6 +529,9 @@ async function startMessagePolling() {
         for (const msg of statusChangedMessages) {
           addMessageToChat(msg, msg.from_id === "me");
         }
+        if (statusChangedMessages.length > 0 && shouldFollow) {
+          window.chatRenderController?.scheduleFollowCorrection(renderSession);
+        }
 
         // 处理新消息
         if (newMessages.length > 0) {
@@ -505,8 +540,8 @@ async function startMessagePolling() {
           }
 
           // 核心逻辑：根据位置决定是自动滚动还是提醒
-          if (isAtBottom) {
-            await scrollToBottom();
+          if (shouldFollow) {
+            window.chatRenderController?.scheduleFollowCorrection(renderSession);
           } else {
             // 不在底部时，强行点亮悬浮按钮和红点
             const scrollBtn = document.getElementById("scroll-to-bottom-btn");
@@ -519,10 +554,12 @@ async function startMessagePolling() {
       }
     } catch (e) {
       console.error("[JS-App] 轮询失败:", e);
+    } finally {
+      pollInFlight = false;
     }
   };
 
-  setInterval(checkNewMessages, pollInterval);
+  setInterval(() => void checkNewMessages(), pollInterval);
 }
 
 // Web 端检查所有用户的未读消息（用于显示左侧列表红点）

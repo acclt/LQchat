@@ -286,20 +286,15 @@ async function apiGetChatHistory(peerId, limit = 10, offset = 0) {
   if (tauri) {
     // 桌面端
     try {
-      if (offset > 0) {
-        // 使用带偏移量的版本
-        return await tauri.core.invoke("get_chat_history_with_offset", {
-          peerId,
-          limit,
-          offset,
-        });
-      } else {
-        // 使用默认版本
-        return await tauri.core.invoke("get_chat_history", { peerId });
-      }
+      // 始终使用分页命令，确保 offset=0 时也不会丢失调用方传入的 limit。
+      return await tauri.core.invoke("get_chat_history_with_offset", {
+        peerId,
+        limit,
+        offset,
+      });
     } catch (e) {
       console.error("[JS-API] 获取历史消息失败:", e);
-      return [];
+      throw new Error("获取聊天记录失败: " + e);
     }
   } else {
     // Web 端
@@ -310,8 +305,7 @@ async function apiGetChatHistory(peerId, limit = 10, offset = 0) {
       const resp = await fetch(url);
 
       if (!resp.ok) {
-        console.error("[JS-API] HTTP 错误:", resp.status, resp.statusText);
-        return [];
+        throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
       }
 
       const text = await resp.text();
@@ -325,7 +319,7 @@ async function apiGetChatHistory(peerId, limit = 10, offset = 0) {
       return data.messages || [];
     } catch (e) {
       console.error("[JS-API] 获取历史消息失败:", e);
-      return [];
+      throw new Error("获取聊天记录失败: " + e);
     }
   }
 }
@@ -874,18 +868,26 @@ async function apiShareFileToOtherApp(filePath) {
 
 // 媒体 Token 缓存（避免每次渲染图片都 invoke）
 let _mediaTokenCache = null;
+let _mediaTokenRequest = null;
 async function apiGetMediaToken() {
   if (_mediaTokenCache) return _mediaTokenCache;
+  if (_mediaTokenRequest) return _mediaTokenRequest;
   const tauri = getTauri();
   if (!tauri) return "";
-  try {
-    _mediaTokenCache = await tauri.core.invoke("get_media_token");
-    console.log("[JS-API] 获取媒体 Token 成功");
-  } catch (e) {
-    console.error("[JS-API] 获取媒体 Token 失败:", e);
-    _mediaTokenCache = "";
-  }
-  return _mediaTokenCache;
+  _mediaTokenRequest = tauri.core.invoke("get_media_token")
+    .then((token) => {
+      _mediaTokenCache = token;
+      console.log("[JS-API] 获取媒体 Token 成功");
+      return token;
+    })
+    .catch((e) => {
+      console.error("[JS-API] 获取媒体 Token 失败:", e);
+      return "";
+    })
+    .finally(() => {
+      _mediaTokenRequest = null;
+    });
+  return _mediaTokenRequest;
 }
 
 // 用对应应用打开文件（仅 Android）

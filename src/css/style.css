@@ -387,6 +387,35 @@ h2::before {
 	gap: 15px;
 }
 
+.chat-bottom-anchor {
+	flex: 0 0 1px;
+	width: 100%;
+	height: 1px;
+	pointer-events: none;
+}
+
+.chat-loading-state {
+	flex: 1;
+	display: grid;
+	place-items: center;
+	min-height: 160px;
+	color: var(--text-dim, #7b849b);
+	font-size: 14px;
+}
+
+.chat-load-error {
+	gap: 12px;
+}
+
+.chat-load-error button {
+	border: 0;
+	border-radius: 10px;
+	padding: 8px 16px;
+	background: var(--primary-color, #8b5cf6);
+	color: #fff;
+	cursor: pointer;
+}
+
 /* --- 消息气泡 --- */
 .message {
 	display: flex;
@@ -631,6 +660,25 @@ h2::before {
 	align-items: center;
 	opacity: 0.9;
 	/* 稍微降低一点不透明度，融入背景 */
+}
+
+/* 文件状态变化只更新内容，不再改变消息占用高度。 */
+.file-transfer-status {
+	box-sizing: border-box;
+	display: flex;
+	align-items: center;
+	width: 100%;
+	height: 18px;
+	min-height: 18px;
+	max-height: 18px;
+	margin-top: 6px;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.file-transfer-status:empty {
+	visibility: hidden;
 }
 
 /* 统一添加一个小圆点，增加精致感 */
@@ -2336,6 +2384,8 @@ body.android-app .android-attachment-panel.open {
 
 /* 图片预览样式 */
 .image-preview {
+	width: min(300px, calc(100vw - 150px));
+	aspect-ratio: 4 / 3;
 	max-width: 300px;
 	overflow: hidden;
 	margin-bottom: 8px;
@@ -2343,7 +2393,8 @@ body.android-app .android-attachment-panel.open {
 
 .image-preview img {
 	width: 100%;
-	height: auto;
+	height: 100%;
+	aspect-ratio: 4 / 3;
 	object-fit: contain;
 	display: block;
 	background: rgba(0, 0, 0, 0.05);
@@ -2613,7 +2664,37 @@ body.android-app .message-file[role="button"]:active {
 }
 
 body.android-app .message-file:not(:has(.image-preview)) {
+	box-sizing: border-box;
+	width: min(260px, calc(100vw - 142px));
 	min-width: min(230px, calc(100vw - 142px));
+	height: 82px;
+	min-height: 82px;
+	max-height: 82px;
+	overflow: hidden;
+}
+
+body.android-app .message-file:not(:has(.image-preview)) .file-info-wrapper {
+	width: 100%;
+	min-width: 0;
+}
+
+body.android-app .message-file:not(:has(.image-preview)) .file-name {
+	display: -webkit-box;
+	height: 39.2px;
+	min-height: 39.2px;
+	max-height: 39.2px;
+	overflow: hidden;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+}
+
+body.android-app .message-file:not(:has(.image-preview)) .file-size {
+	height: 17px;
+	min-height: 17px;
+	max-height: 17px;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
 }
 
 body.android-app .message.received .message-file:not(:has(.image-preview)) {
@@ -2650,6 +2731,9 @@ body.android-app .copyable-text-message:active {
 body.android-app .file-save-state {
 	box-sizing: border-box;
 	width: 100%;
+	height: 54px;
+	min-height: 54px;
+	max-height: 54px;
 	max-width: min(310px, calc(100vw - 118px));
 	margin-top: 2px;
 	padding: 8px 10px;
@@ -2660,7 +2744,11 @@ body.android-app .file-save-state {
 	font-size: 12px;
 	font-weight: 550;
 	line-height: 1.45;
+	display: -webkit-box;
+	overflow: hidden;
 	word-break: break-all;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
 	box-shadow: 0 3px 10px rgba(41, 45, 61, 0.08);
 }
 
@@ -2764,25 +2852,36 @@ body.android-app .file-save-state.action-error {
 .confirm-dialog-overlay {
     position: fixed;
     top: 0; left: 0; width: 100%; height: 100%;
-    background: rgba(0, 0, 0, 0.7);
-    backdrop-filter: blur(8px);
+    box-sizing: border-box;
+    padding: 20px;
+    background: rgba(38, 31, 61, 0.28);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
     z-index: 3000; /* 确保在管理弹窗之上 */
     display: flex; align-items: center; justify-content: center;
 }
 
 .confirm-dialog-content {
     width: 320px;
-    background: #282a36;
-    border: 1px solid rgba(255, 85, 85, 0.4);
+    max-width: 100%;
+    box-sizing: border-box;
+    transform: none;
+    background: #fff;
+    border: 1px solid rgba(143, 92, 229, .22);
     border-radius: 16px;
     padding: 25px;
     text-align: center;
-    box-shadow: 0 20px 40px rgba(0,0,0,0.5);
-    animation: popIn 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+    box-shadow: 0 20px 48px rgba(51, 43, 84, .2);
+    animation: confirmDialogFade 120ms ease-out;
+}
+
+@keyframes confirmDialogFade {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 
 .confirm-dialog-content p {
-    color: #f8f8f2;
+    color: var(--android-ink, #202536);
     margin-bottom: 25px;
     line-height: 1.6;
     font-size: 15px;
@@ -2807,13 +2906,20 @@ body.android-app .file-save-state.action-error {
 
 .confirm-btn-cancel {
     flex: 1;
-    background: #44475a;
-    color: #f8f8f2;
-    border: none;
+    background: #f3f4f8;
+    color: var(--android-muted, #70798f);
+    border: 1px solid var(--android-line, #e3e5ec);
     padding: 10px;
     border-radius: 8px;
     font-weight: bold;
     cursor: pointer;
+}
+
+.user-mgmt-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    margin-top: 20px;
 }
 
 /* 模型选择按钮容器 */
@@ -3124,6 +3230,21 @@ body.android-app .theme-panel {
 	border-color: rgba(143, 92, 229, .22);
 	color: var(--android-ink);
 	box-shadow: 0 24px 60px rgba(51, 43, 84, .18);
+}
+
+body.android-app .edit-panel {
+	backdrop-filter: none;
+	-webkit-backdrop-filter: none;
+	animation: none;
+}
+
+body.android-app .mgmt-action-btn {
+	transition: background-color 100ms ease;
+}
+
+body.android-app .mgmt-action-btn:hover,
+body.android-app .mgmt-action-btn:active {
+	transform: none;
 }
 
 body.android-app .settings-panel h2,

@@ -99,7 +99,7 @@ function initNameEditor() {
 }
 
 // 添加新用户到列表
-async function addUserToList(id, name, addr, isOffline = false) {
+async function addUserToList(id, name, addr, isOffline = false, deferSort = false) {
   const list = document.getElementById("user-list");
   if (!list) return;
 
@@ -108,7 +108,8 @@ async function addUserToList(id, name, addr, isOffline = false) {
   for (let item of existingItems) {
     if (item.dataset.id === id) {
       // 已存在,更新状态
-      updateUserStatus(item, name, addr, isOffline);
+      const sortChanged = updateUserStatus(item, name, addr, isOffline);
+      if (sortChanged && !deferSort) sortUserList();
       return;
     }
   }
@@ -171,7 +172,7 @@ async function addUserToList(id, name, addr, isOffline = false) {
   li.addEventListener("touchmove", () => clearTimeout(touchTimer));
 
   list.appendChild(li);
-  sortUserList();
+  if (!deferSort) sortUserList();
 
   // 初始化新用户的时间戳,避免误报未读消息
   if (!window.userLastMessageTimestamps) {
@@ -240,18 +241,24 @@ function updateUserStatus(item, name, addr, isOffline) {
   // 只要状态发生了变化(上线或下线),就重排一次列表
   if (wasOffline !== isOffline) {
     console.log(`[UI] 用户 ${name} 状态变更为: ${isOffline ? "离线" : "在线"}`);
-    sortUserList();
   }
+  return wasOffline !== isOffline;
 }
 
 // 通用排序函数:未读 > 在线 > 字母顺序
-function sortUserList() {
+function sortUserList(force = false) {
   const list = document.getElementById("user-list");
   if (!list) return;
 
-  const items = Array.from(list.querySelectorAll("li"));
+  if (!force && document.body.classList.contains("android-app") &&
+      document.querySelector("#user-mgmt-panel, .confirm-dialog-overlay")) {
+    window.userListSortPending = true;
+    return;
+  }
+  window.userListSortPending = false;
 
-  items.sort((a, b) => {
+  const items = Array.from(list.querySelectorAll("li"));
+  const sortedItems = [...items].sort((a, b) => {
     // 1. 检查未读状态 (最高优先级)
     const aUnread = a.classList.contains("has-unread") ? 1 : 0;
     const bUnread = b.classList.contains("has-unread") ? 1 : 0;
@@ -268,12 +275,169 @@ function sortUserList() {
     return aName.localeCompare(bName);
   });
 
-  // 重新按顺序添加进 DOM
-  items.forEach((item) => list.appendChild(item));
+  const orderChanged = sortedItems.some((item, index) => item !== items[index]);
+  if (!orderChanged) return;
+
+  const fragment = document.createDocumentFragment();
+  sortedItems.forEach((item) => fragment.appendChild(item));
+  list.appendChild(fragment);
 }
 
 // 当前聊天对象 - 全局变量
 window.currentChatPeer = null;
+
+const CHAT_BOTTOM_THRESHOLD = 24;
+const chatRenderController = {
+  sessionId: 0,
+  peerId: null,
+  followLatest: true,
+  userScrollIntentUntil: 0,
+  correctionFrame: 0,
+  messageResizeObserver: null,
+
+  begin(peerId) {
+    this.sessionId += 1;
+    this.peerId = peerId;
+    this.followLatest = true;
+    this.userScrollIntentUntil = 0;
+    window.currentChatMessages = null;
+    return { peerId, sessionId: this.sessionId };
+  },
+
+  close() {
+    this.sessionId += 1;
+    this.peerId = null;
+    this.followLatest = true;
+    window.currentChatMessages = null;
+    if (this.correctionFrame) cancelAnimationFrame(this.correctionFrame);
+    this.messageResizeObserver?.disconnect();
+  },
+
+  snapshot(peerId = this.peerId) {
+    return { peerId, sessionId: this.sessionId };
+  },
+
+  isCurrent(snapshot) {
+    return Boolean(
+      snapshot &&
+      snapshot.sessionId === this.sessionId &&
+      snapshot.peerId === this.peerId &&
+      window.currentChatPeer?.id === snapshot.peerId,
+    );
+  },
+
+  getContainer() {
+    return document.getElementById("chat-messages");
+  },
+
+  ensureBottomAnchor(container = this.getContainer()) {
+    if (!container) return null;
+    let anchor = container.querySelector("#chat-bottom-anchor");
+    if (!anchor) {
+      anchor = document.createElement("div");
+      anchor.id = "chat-bottom-anchor";
+      anchor.className = "chat-bottom-anchor";
+      anchor.setAttribute("aria-hidden", "true");
+      container.appendChild(anchor);
+    }
+    return anchor;
+  },
+
+  isAtBottom(container = this.getContainer()) {
+    if (!container) return true;
+    return container.scrollHeight - container.scrollTop - container.clientHeight <=
+      CHAT_BOTTOM_THRESHOLD;
+  },
+
+  noteUserScrollIntent() {
+    this.userScrollIntentUntil = performance.now() + 700;
+  },
+
+  handleScroll() {
+    const atBottom = this.isAtBottom();
+    if (atBottom) {
+      this.followLatest = true;
+    } else if (performance.now() <= this.userScrollIntentUntil) {
+      this.followLatest = false;
+    }
+    this.updateBottomButton(atBottom);
+  },
+
+  updateBottomButton(atBottom = this.isAtBottom()) {
+    const button = document.getElementById("scroll-to-bottom-btn");
+    if (!button) return;
+    button.classList.toggle("show", !atBottom);
+    if (atBottom) document.getElementById("unread-dot")?.classList.remove("show");
+  },
+
+  scrollToLatest({ force = false, behavior = "auto", snapshot = null } = {}) {
+    if (snapshot && !this.isCurrent(snapshot)) return;
+    if (!force && !this.followLatest) return;
+    const container = this.getContainer();
+    if (!container) return;
+    this.ensureBottomAnchor(container);
+    if (behavior === "smooth") {
+      container.scrollTo({ top: container.scrollHeight, behavior });
+    } else {
+      container.scrollTop = container.scrollHeight;
+    }
+    this.updateBottomButton(true);
+  },
+
+  scheduleFollowCorrection(snapshot = this.snapshot()) {
+    if (!this.followLatest || !this.isCurrent(snapshot)) return;
+    if (this.correctionFrame) cancelAnimationFrame(this.correctionFrame);
+    this.correctionFrame = requestAnimationFrame(() => {
+      this.correctionFrame = requestAnimationFrame(() => {
+        this.correctionFrame = 0;
+        this.scrollToLatest({ snapshot });
+      });
+    });
+  },
+
+  observeMessages(container = this.getContainer()) {
+    if (!container || typeof ResizeObserver === "undefined") return;
+    if (!this.messageResizeObserver) {
+      this.messageResizeObserver = new ResizeObserver(() => {
+        if (this.followLatest) this.scheduleFollowCorrection();
+      });
+    }
+    this.messageResizeObserver.disconnect();
+    container.querySelectorAll(":scope > .message").forEach((message) => {
+      this.messageResizeObserver.observe(message);
+    });
+  },
+
+  insertBeforeAnchor(node, container = this.getContainer()) {
+    if (!container) return;
+    const anchor = this.ensureBottomAnchor(container);
+    container.insertBefore(node, anchor);
+    if (node.nodeType === Node.ELEMENT_NODE && node.classList.contains("message")) {
+      this.messageResizeObserver?.observe(node);
+    }
+  },
+
+  captureVisibleAnchor(container = this.getContainer()) {
+    if (!container) return null;
+    const containerTop = container.getBoundingClientRect().top;
+    const message = [...container.querySelectorAll(":scope > .message")]
+      .find((item) => item.getBoundingClientRect().bottom > containerTop);
+    if (!message) return null;
+    return {
+      id: message.dataset.msgId,
+      offset: message.getBoundingClientRect().top - containerTop,
+    };
+  },
+
+  restoreVisibleAnchor(anchor, container = this.getContainer()) {
+    if (!anchor || !container) return;
+    const message = container.querySelector(`[data-msg-id="${anchor.id}"]`);
+    if (!message) return;
+    const containerTop = container.getBoundingClientRect().top;
+    container.scrollTop += message.getBoundingClientRect().top - containerTop - anchor.offset;
+  },
+};
+window.chatRenderController = chatRenderController;
 
 // 初始化聊天功能
 function initChat() {
@@ -283,6 +447,14 @@ function initChat() {
   const attachFileBtn = document.getElementById("attach-file-btn");
   const fileInput = document.getElementById("file-input");
   const chatContainer = document.getElementById("chat-container");
+
+  ["touchstart", "pointerdown", "wheel"].forEach((eventName) => {
+    chatMessagesIntentTarget()?.addEventListener(
+      eventName,
+      () => chatRenderController.noteUserScrollIntent(),
+      { passive: true },
+    );
+  });
 
   // 关闭聊天窗口
   closeChatBtn.addEventListener("click", () => {
@@ -337,8 +509,10 @@ function initChat() {
       // Android: 使用自定义 SAF 选择器（持久化权限）
       const isAndroid = navigator.userAgent.includes("Android");
       if (isAndroid) {
+        window.androidSafChatTarget = captureChatTarget();
         tauri.core.invoke("open_saf_picker").catch(e => {
           console.error("[UI] SAF 选择器调用失败:", e);
+          window.androidSafChatTarget = null;
           // 降级为桌面端对话框
           sendFile(null);
         });
@@ -369,20 +543,21 @@ function initChat() {
       try {
         await tauri.event.listen("saf-file-selected", async (event) => {
           const fileInfo = event.payload;
+          const target = window.androidSafChatTarget;
+          window.androidSafChatTarget = null;
           console.log("[UI] SAF 持久化文件已选择:", fileInfo);
-          if (!window.currentChatPeer) {
-            alert("请先选择一个聊天对象");
+          if (!target || !chatRenderController.isCurrent(target.session)) {
+            showMessageActionToast("聊天对象已切换，请重新选择文件");
             return;
           }
           try {
             await apiSendFile(
-              window.currentChatPeer.id,
-              window.currentChatPeer.addr,
+              target.peer.id,
+              target.peer.addr,
               null,
               fileInfo.uri
             );
-            await loadChatHistory(window.currentChatPeer.id, true);
-            await scrollToBottom();
+            await refreshCapturedChat(target, { forceLatest: true });
           } catch (e) {
             console.error("[UI] SAF 文件发送失败:", e);
             alert("文件发送失败: " + e.message);
@@ -418,7 +593,35 @@ const androidAttachmentState = {
   apps: [],
   album: "全部图片",
   selected: { image: new Map(), file: new Map(), app: new Map() },
+  targetPeer: null,
+  targetSession: null,
 };
+
+function copyChatPeer(peer = window.currentChatPeer) {
+  return peer ? { id: peer.id, name: peer.name, addr: peer.addr } : null;
+}
+
+function captureChatTarget(peer = window.currentChatPeer) {
+  const targetPeer = copyChatPeer(peer);
+  return targetPeer
+    ? { peer: targetPeer, session: chatRenderController.snapshot(targetPeer.id) }
+    : null;
+}
+
+async function refreshCapturedChat(target, { forceLatest = false } = {}) {
+  if (!target || !chatRenderController.isCurrent(target.session)) return false;
+  if (forceLatest) chatRenderController.followLatest = true;
+  await loadChatHistory(target.peer.id, true, target.session);
+  if (forceLatest) {
+    chatRenderController.scrollToLatest({ force: true, snapshot: target.session });
+    chatRenderController.scheduleFollowCorrection(target.session);
+  }
+  return true;
+}
+
+function clearAndroidAttachmentSelections() {
+  Object.values(androidAttachmentState.selected).forEach((selection) => selection.clear());
+}
 
 function isAndroidApp() {
   return document.body.classList.contains("android-app");
@@ -612,6 +815,13 @@ function openAndroidImagePreview(item) {
 
 async function openAndroidAttachment(kind, continueAdding = false) {
   if (!window.currentChatPeer) return;
+  const currentTarget = captureChatTarget();
+  const targetChanged = androidAttachmentState.targetPeer?.id !== currentTarget.peer.id;
+  if (targetChanged) clearAndroidAttachmentSelections();
+  if (!continueAdding || targetChanged || !androidAttachmentState.targetPeer) {
+    androidAttachmentState.targetPeer = currentTarget.peer;
+    androidAttachmentState.targetSession = currentTarget.session;
+  }
   androidAttachmentState.kind = kind;
   androidAttachmentState.mode = kind === "file" ? "queue" : "picker";
   setAndroidAttachmentPanel(true);
@@ -630,18 +840,26 @@ async function openAndroidAttachment(kind, continueAdding = false) {
 async function sendAndroidAttachmentQueue() {
   const kind = androidAttachmentState.kind;
   const selected = androidAttachmentState.selected[kind];
-  if (!window.currentChatPeer || !selected.size) return;
+  if (!selected.size || !androidAttachmentState.targetPeer) return;
+  const target = {
+    peer: copyChatPeer(androidAttachmentState.targetPeer),
+    session: androidAttachmentState.targetSession,
+  };
+  if (!chatRenderController.isCurrent(target.session)) {
+    showMessageActionToast("聊天对象已切换，请重新选择附件");
+    return;
+  }
   androidAttachmentState.mode = "queue";
   renderAndroidAttachmentPanel();
   if (document.getElementById("chat-input")?.value.trim()) {
-    await sendMessage();
+    await sendMessage(target.peer);
   }
   for (const item of selected.values()) {
     if (item.status === "sent" || item.status === "pending") continue;
     item.status = "sending";
     renderAndroidAttachmentPanel();
     try {
-      const result = await apiSendFile(window.currentChatPeer.id, window.currentChatPeer.addr, null, item.uri);
+      const result = await apiSendFile(target.peer.id, target.peer.addr, null, item.uri);
       item.msgId = result?.msg_id || item.msgId;
       item.status = result?.status === "pending" ? "pending" : "sent";
     } catch (e) {
@@ -649,9 +867,8 @@ async function sendAndroidAttachmentQueue() {
       item.error = e.message;
     }
     renderAndroidAttachmentPanel();
-    await loadChatHistory(window.currentChatPeer.id, true);
   }
-  await scrollToBottom();
+  await refreshCapturedChat(target, { forceLatest: true });
 }
 
 function showIncomingSystemNotification(message) {
@@ -716,6 +933,7 @@ function openChat(peer) {
   }
 
   window.currentChatPeer = peer;
+  const chatSession = chatRenderController.begin(peer.id);
 
   // 3. 立即显示界面(提升响应感)
   document.body.classList.add("chat-open");
@@ -725,7 +943,13 @@ function openChat(peer) {
   const chatMessages = document.getElementById("chat-messages");
 
   if (chatWithName) chatWithName.textContent = `${peer.name}`;
-  if (chatMessages) chatMessages.innerHTML = ""; // 加载前清空
+  if (chatMessages) {
+    const loading = document.createElement("div");
+    loading.className = "chat-loading-state";
+    loading.setAttribute("role", "status");
+    loading.textContent = "正在加载聊天记录…";
+    chatMessages.replaceChildren(loading);
+  }
 
   // 4. 消除红点和高亮
   const userLi = document.querySelector(`#user-list li[data-id="${peer.id}"]`);
@@ -737,8 +961,27 @@ function openChat(peer) {
 
   // 5. 异步加载历史
   window.lastMessageTimestamp = 0;
-  loadChatHistory(peer.id).catch((e) => {
+  loadChatHistory(peer.id, false, chatSession).catch((e) => {
     console.error("[UI] 加载历史失败:", e);
+    if (!chatRenderController.isCurrent(chatSession)) return;
+    const errorState = document.createElement("div");
+    errorState.className = "chat-loading-state chat-load-error";
+    const message = document.createElement("span");
+    message.textContent = "聊天记录加载失败";
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.textContent = "重试";
+    retry.addEventListener("click", () => {
+      errorState.replaceChildren("正在重新加载…");
+      loadChatHistory(peer.id, false, chatSession).catch((retryError) => {
+        console.error("[UI] 重新加载历史失败:", retryError);
+        if (chatRenderController.isCurrent(chatSession)) {
+          errorState.replaceChildren(message, retry);
+        }
+      });
+    });
+    errorState.append(message, retry);
+    chatMessages?.replaceChildren(errorState);
   });
 
   // 6. 清除系统通知栏中该用户的未读通知（按 from_id 按组清除）
@@ -776,6 +1019,7 @@ function performCloseChatUI() {
   const chatContainer = document.getElementById("chat-container");
   if (chatContainer) chatContainer.style.display = "none";
   document.body.classList.remove("chat-open");
+  chatRenderController.close();
   window.currentChatPeer = null;
   updateListHighlight(null); // 清除高亮
 }
@@ -869,12 +1113,14 @@ window.addEventListener("popstate", function (event) {
 });
 
 // 发送消息
-async function sendMessage() {
-  if (!window.currentChatPeer) return;
+async function sendMessage(targetPeer = window.currentChatPeer) {
+  if (!targetPeer) return false;
 
   const chatInput = document.getElementById("chat-input");
-  const content = chatInput.value.trim();
-  if (!content) return;
+  const draft = chatInput.value;
+  const content = draft.trim();
+  if (!content) return false;
+  const chatSession = chatRenderController.snapshot(targetPeer.id);
 
   chatInput.value = "";
   chatInput.style.height = "auto";
@@ -883,31 +1129,52 @@ async function sendMessage() {
   try {
     // 1. 发送 API
     await apiSendMessage(
-      window.currentChatPeer.id,
-      window.currentChatPeer.addr,
+      targetPeer.id,
+      targetPeer.addr,
       content,
     );
 
-    // 2. 发送完后,纯粹地通过刷新历史记录让它显示出来
-    await loadChatHistory(window.currentChatPeer.id, true);
-    await scrollToBottom();
+    if (chatRenderController.isCurrent(chatSession)) {
+      chatRenderController.followLatest = true;
+      await loadChatHistory(targetPeer.id, true, chatSession);
+      chatRenderController.scrollToLatest({ force: true, snapshot: chatSession });
+    }
+    return true;
   } catch (e) {
     console.error("[UI] 发送异常:", e);
+    if (chatRenderController.isCurrent(chatSession) && !chatInput.value) {
+      chatInput.value = draft;
+      chatInput.dispatchEvent(new Event("input", { bubbles: true }));
+    }
     alert("发送失败: " + e.message);
+    return false;
   }
+}
+
+function upsertMessageInContainer(container, message, isSent, prepend = false) {
+  if (!container || !message.id || message.id === "null") return;
+  const existing = container.querySelector(`[data-msg-id="${message.id}"]`);
+  const next = createMessageElement(message, isSent);
+  if (existing) {
+    existing.replaceWith(next);
+  } else if (prepend) {
+    container.insertBefore(next, container.firstChild);
+  } else {
+    chatRenderController.insertBeforeAnchor(next, container);
+  }
+  chatRenderController.messageResizeObserver?.observe(next);
+  chatRenderController.scheduleFollowCorrection();
+}
+
+function chatMessagesIntentTarget() {
+  return document.getElementById("chat-messages");
 }
 
 function addMessageToChat(message, isSent) {
   // 如果 ID 依然是无效的，坚决不渲染到 DOM，防止产生无法选中的"僵尸"气泡
   if (!message.id || message.id === "null") return;
   const chatMessages = document.getElementById("chat-messages");
-  const existing = chatMessages.querySelector(`[data-msg-id="${message.id}"]`);
-  if (existing) {
-    // 替换而非先删后加，避免并发时多条路径同时检测不到已有元素
-    existing.replaceWith(createMessageElement(message, isSent));
-  } else {
-    chatMessages.appendChild(createMessageElement(message, isSent));
-  }
+  upsertMessageInContainer(chatMessages, message, isSent);
 
   if (message.timestamp && !String(message.id).startsWith("temp_")) {
     if (message.timestamp > (window.lastMessageTimestamp || 0)) {
@@ -920,12 +1187,7 @@ function addMessageToChat(message, isSent) {
 function prependMessageToChat(message, isSent) {
   if (!message.id || message.id === "null") return;
   const chatMessages = document.getElementById("chat-messages");
-  const existing = chatMessages.querySelector(`[data-msg-id="${message.id}"]`);
-  if (existing) {
-    existing.replaceWith(createMessageElement(message, isSent));
-  } else {
-    chatMessages.insertBefore(createMessageElement(message, isSent), chatMessages.firstChild);
-  }
+  upsertMessageInContainer(chatMessages, message, isSent, true);
 }
 
 // 更新流式消息气泡内容
@@ -942,7 +1204,8 @@ function updateStreamMessage(message) {
     const contentDiv = document.createElement("div");
     contentDiv.className = "message-content stream-content";
     container.appendChild(contentDiv);
-    chatMessages.appendChild(container);
+    chatRenderController.insertBeforeAnchor(container, chatMessages);
+    chatRenderController.messageResizeObserver?.observe(container);
   }
 
   const contentDiv = container.querySelector(".message-content");
@@ -1008,6 +1271,7 @@ function createFileIcon(message) {
   const fileName = document.createElement("div");
   fileName.className = "file-name";
   fileName.textContent = message.file_name || message.content;
+  fileName.title = fileName.textContent;
 
   // 文件大小
   const fileSize = document.createElement("div");
@@ -1124,42 +1388,6 @@ async function copyMessageText(text) {
   }
 }
 
-// 等待聊天窗口中的所有图片加载完成
-function waitForImagesToLoad(container) {
-  return new Promise((resolve) => {
-    const images = container.querySelectorAll("img");
-
-    if (images.length === 0) {
-      resolve();
-      return;
-    }
-
-    let loadedCount = 0;
-    const totalImages = images.length;
-
-    const checkAllLoaded = () => {
-      loadedCount++;
-      if (loadedCount === totalImages) {
-        resolve();
-      }
-    };
-
-    images.forEach((img) => {
-      if (img.complete) {
-        checkAllLoaded();
-      } else {
-        img.addEventListener("load", checkAllLoaded);
-        img.addEventListener("error", checkAllLoaded); // 即使加载失败也要继续
-      }
-    });
-
-    // 设置超时,避免永久等待
-    setTimeout(() => {
-      resolve();
-    }, 2000);
-  });
-}
-
 // 更新托盘闪烁状态（桌面端：有未读红点时闪烁）
 function updateTrayFlash() {
   if (!window.__TAURI__) {
@@ -1190,116 +1418,106 @@ function updateTrayFlash() {
 
 // 展开/收起后检查滚动按钮状态
 function checkScrollButton() {
-  const chatMessages = document.getElementById("chat-messages");
-  const btn = document.getElementById("scroll-to-bottom-btn");
-  if (!chatMessages || !btn) return;
-  const isAtBottom = chatMessages.scrollHeight - chatMessages.scrollTop -
-      chatMessages.clientHeight < 150;
-  if (isAtBottom) {
-    btn.classList.remove("show");
-  } else {
-    btn.classList.add("show");
-  }
+  chatRenderController.updateBottomButton();
 }
 
 // 滚动到聊天窗口底部(等待图片加载)
 async function scrollToBottom() {
-  const chatMessages = document.getElementById("chat-messages");
-  if (!chatMessages) return;
-
-  // 等待图片加载完成
-  await waitForImagesToLoad(chatMessages);
-
-  // 滚动到底部
-  chatMessages.scrollTop = chatMessages.scrollHeight;
+  chatRenderController.followLatest = true;
+  chatRenderController.scrollToLatest({ force: true });
+  chatRenderController.scheduleFollowCorrection();
 }
 
 // 加载聊天历史(支持懒加载)
-async function loadChatHistory(peerId, preserveScroll = false) {
-  try {
-    // 禁用轮询,避免干扰加载过程
-    const wasPollingEnabled = window.messagePollingEnabled;
-    window.messagePollingEnabled = false;
+function suspendMessagePolling() {
+  const count = window.messagePollingSuspendCount || 0;
+  if (count === 0) window.messagePollingResumeState = window.messagePollingEnabled;
+  window.messagePollingSuspendCount = count + 1;
+  window.messagePollingEnabled = false;
+}
 
-    // 首次加载,获取最新的10条消息
-    const messages = await apiGetChatHistory(peerId, 10, 0);
+function resumeMessagePolling() {
+  window.messagePollingSuspendCount = Math.max(
+    0,
+    (window.messagePollingSuspendCount || 1) - 1,
+  );
+  if (window.messagePollingSuspendCount === 0) {
+    window.messagePollingEnabled = window.messagePollingResumeState !== false;
+  }
+}
+
+async function loadChatHistory(peerId, preserveScroll = false, sessionSnapshot = null) {
+  const snapshot = sessionSnapshot || chatRenderController.snapshot(peerId);
+  const isStaleRequest = () => !chatRenderController.isCurrent(snapshot);
+  suspendMessagePolling();
+  try {
+    // 一次读取足够构成首屏的消息，再批量提交 DOM，避免边加载边闪烁。
+    const pageSize = 20;
+    const messages = await apiGetChatHistory(peerId, pageSize, 0);
+
+    if (isStaleRequest()) return false;
 
     const chatMessages = document.getElementById("chat-messages");
-
-    // 保存当前滚动位置
-    const oldScrollTop = chatMessages.scrollTop;
-    const oldScrollHeight = chatMessages.scrollHeight;
-    const wasAtBottom =
-      oldScrollHeight - oldScrollTop - chatMessages.clientHeight < 100;
-
-    chatMessages.innerHTML = "";
+    if (!chatMessages) throw new Error("找不到聊天消息容器");
+    const wasFollowing = chatRenderController.followLatest ||
+      chatRenderController.isAtBottom(chatMessages);
+    const visibleAnchor = preserveScroll && !wasFollowing
+      ? chatRenderController.captureVisibleAnchor(chatMessages)
+      : null;
 
     // 存储当前对话的消息总数和已加载数量
-    window.currentChatMessages = {
+    const messageState = window.currentChatMessages?.peerId === peerId
+      ? window.currentChatMessages
+      : {
       peerId: peerId,
-      loadedCount: messages.length,
-      totalCount: messages.length,
       isLoading: false,
-      hasMore: true, // 默认假设有更多,尝试加载时才知道
     };
 
+    if (preserveScroll && !wasFollowing && chatMessages.querySelector(".message")) {
+      for (const msg of messages) {
+        upsertMessageInContainer(chatMessages, msg, msg.from_id === "me");
+      }
+    } else {
+      const fragment = document.createDocumentFragment();
+      for (const msg of messages) {
+        fragment.appendChild(createMessageElement(msg, msg.from_id === "me"));
+      }
+      const bottomAnchor = document.createElement("div");
+      bottomAnchor.id = "chat-bottom-anchor";
+      bottomAnchor.className = "chat-bottom-anchor";
+      bottomAnchor.setAttribute("aria-hidden", "true");
+      fragment.appendChild(bottomAnchor);
+      chatMessages.replaceChildren(fragment);
+    }
+
     for (const msg of messages) {
-      addMessageToChat(msg, msg.from_id === "me");
       // 更新最后消息时间戳
       if (msg.timestamp > (window.lastMessageTimestamp || 0)) {
         window.lastMessageTimestamp = msg.timestamp;
       }
     }
 
-    // 等待图片加载完成
-    await waitForImagesToLoad(chatMessages);
+    if (isStaleRequest()) return false;
+    messageState.loadedCount = chatMessages.querySelectorAll(":scope > .message").length;
+    messageState.totalCount = messageState.loadedCount;
+    if (!(preserveScroll && !wasFollowing && typeof messageState.hasMore === "boolean")) {
+      messageState.hasMore = messages.length === pageSize;
+    }
+    messageState.sessionId = snapshot.sessionId;
+    window.currentChatMessages = messageState;
+    chatRenderController.observeMessages(chatMessages);
 
-    // 首次加载时,如果没有滚动条,继续加载更多消息直到出现滚动条或没有更多消息
-    if (!preserveScroll) {
-      let hasScrollbar = chatMessages.scrollHeight > chatMessages.clientHeight;
-
-      while (!hasScrollbar && window.currentChatMessages.hasMore) {
-        const offset = window.currentChatMessages.loadedCount;
-        const moreMessages = await apiGetChatHistory(peerId, 10, offset);
-
-        if (moreMessages.length === 0) {
-          window.currentChatMessages.hasMore = false;
-          break;
-        }
-
-        // 在顶部插入消息
-        for (let i = moreMessages.length - 1; i >= 0; i--) {
-          const msg = moreMessages[i];
-          prependMessageToChat(msg, msg.from_id === "me");
-        }
-
-        window.currentChatMessages.loadedCount += moreMessages.length;
-
-        if (moreMessages.length < 10) {
-          window.currentChatMessages.hasMore = false;
-          break;
-        }
-
-        // 等待图片加载
-        await waitForImagesToLoad(chatMessages);
-
-        // 检查是否出现滚动条
-        hasScrollbar = chatMessages.scrollHeight > chatMessages.clientHeight;
-      }
-
-      // 自动加载完成后,滚动到底部
-      await scrollToBottom();
+    if (!preserveScroll || wasFollowing) {
+      chatRenderController.followLatest = true;
+      chatRenderController.scrollToLatest({ force: true, snapshot });
+      chatRenderController.scheduleFollowCorrection(snapshot);
     } else {
-      // 恢复滚动位置
-      if (!wasAtBottom) {
-        // 如果用户不在底部,尝试保持相对位置
-        const newScrollHeight = chatMessages.scrollHeight;
-        const scrollDiff = newScrollHeight - oldScrollHeight;
-        chatMessages.scrollTop = oldScrollTop + scrollDiff;
-      } else {
-        // 用户在底部时,滚动到底部
-        await scrollToBottom();
-      }
+      requestAnimationFrame(() => {
+        if (!isStaleRequest()) {
+          chatRenderController.restoreVisibleAnchor(visibleAnchor, chatMessages);
+          chatRenderController.updateBottomButton();
+        }
+      });
     }
 
     // 只在首次加载时初始化滚动监听器
@@ -1307,153 +1525,81 @@ async function loadChatHistory(peerId, preserveScroll = false) {
       initScrollListener();
     }
 
-    // 恢复轮询
-    window.messagePollingEnabled = wasPollingEnabled;
-  } catch (e) {
-    console.error("[UI] 加载历史消息失败:", e);
-    // 出错时也要恢复轮询
-    window.messagePollingEnabled = true;
+    return true;
+  } finally {
+    resumeMessagePolling();
   }
 }
 
 // 初始化滚动监听器(懒加载)
 function initScrollListener() {
   const chatMessages = document.getElementById("chat-messages");
-
-  // 移除旧的监听器(如果存在)
+  if (!chatMessages) return;
   if (window.scrollListenerAttached) {
     chatMessages.removeEventListener("scroll", window.handleChatScroll);
   }
 
-  // 定义滚动处理函数
   window.handleChatScroll = async function () {
-    if (!window.currentChatMessages) {
+    const state = window.currentChatMessages;
+    if (!state || state.isLoading || !state.hasMore) return;
+    if (chatMessages.scrollHeight <= chatMessages.clientHeight || chatMessages.scrollTop >= 80) {
       return;
     }
 
-    if (window.currentChatMessages.isLoading) {
-      return;
-    }
+    const snapshot = { peerId: state.peerId, sessionId: state.sessionId };
+    if (!chatRenderController.isCurrent(snapshot)) return;
+    state.isLoading = true;
+    suspendMessagePolling();
+    const visibleAnchor = chatRenderController.captureVisibleAnchor(chatMessages);
 
-    const scrollTop = chatMessages.scrollTop;
-    const scrollHeight = chatMessages.scrollHeight;
-    const clientHeight = chatMessages.clientHeight;
-
-    // 检查是否滚动到底部(距离底部小于100px)
-    const isAtBottom = scrollHeight - scrollTop - clientHeight < 100;
-
-    // 如果滚动到底部,触发一次刷新(检查新消息)
-    if (isAtBottom && window.lastScrollWasNotAtBottom) {
-      console.log("[UI] 滚动到底部,检查新消息");
-      window.currentChatMessages.isLoading = true;
-      try {
-        // 同样只取最新的小批量,靠时间戳过滤
-        const latestMessages = await apiGetChatHistory(
-          window.currentChatMessages.peerId,
-          20,
-          0,
-        );
-        const newMessages = latestMessages.filter((msg) =>
-          msg.timestamp > (window.lastMessageTimestamp || 0)
-        );
-
-        if (newMessages.length > 0) {
-          for (const msg of newMessages) {
-            addMessageToChat(msg, msg.from_id === "me");
-            if (msg.timestamp > (window.lastMessageTimestamp || 0)) {
-              window.lastMessageTimestamp = msg.timestamp;
-            }
-          }
-          window.currentChatMessages.loadedCount += newMessages.length;
-          window.currentChatMessages.totalCount += newMessages.length;
-          await scrollToBottom();
-        }
-      } catch (e) {
-        console.error("[UI] 检查新消息失败:", e);
-      } finally {
-        window.currentChatMessages.isLoading = false;
+    try {
+      const pageSize = 10;
+      const historyOffset = chatMessages.querySelectorAll(
+        ':scope > .message[data-msg-id]',
+      ).length;
+      const moreMessages = await apiGetChatHistory(
+        state.peerId,
+        pageSize,
+        historyOffset,
+      );
+      if (!chatRenderController.isCurrent(snapshot) || window.currentChatMessages !== state) {
+        return;
       }
-    }
 
-    // 记录当前是否在底部
-    window.lastScrollWasNotAtBottom = !isAtBottom;
-
-    if (!window.currentChatMessages.hasMore) {
-      return;
-    }
-
-    // 检查是否滚动到顶部(距离顶部小于100px)
-    // 同时确保不是刚加载完(scrollHeight > clientHeight 说明有滚动条)
-    const hasScrollbar = scrollHeight > clientHeight;
-    if (hasScrollbar && scrollTop < 100) {
-      console.log("[UI] 触发懒加载,加载更多历史消息");
-
-      window.currentChatMessages.isLoading = true;
-
-      // 暂时禁用消息轮询,防止干扰
-      const wasPollingEnabled = window.messagePollingEnabled;
-      window.messagePollingEnabled = false;
-
-      try {
-        // 加载更多消息
-        const offset = window.currentChatMessages.loadedCount;
-
-        const moreMessages = await apiGetChatHistory(
-          window.currentChatMessages.peerId,
-          10,
-          offset,
-        );
-
-        if (moreMessages.length === 0) {
-          console.log("[UI] 没有更多历史消息了");
-          window.currentChatMessages.hasMore = false;
-          window.currentChatMessages.isLoading = false;
-          window.messagePollingEnabled = wasPollingEnabled;
-          return;
-        }
-
-        // 保存当前滚动位置
-        const oldScrollTop = chatMessages.scrollTop;
-        const oldScrollHeight = chatMessages.scrollHeight;
-
-        // 在顶部插入消息(倒序插入)
-        for (let i = moreMessages.length - 1; i >= 0; i--) {
-          const msg = moreMessages[i];
-          prependMessageToChat(msg, msg.from_id === "me");
-        }
-
-        // 更新已加载数量
-        window.currentChatMessages.loadedCount += moreMessages.length;
-
-        // 如果返回的消息少于10条,说明没有更多了
-        if (moreMessages.length < 10) {
-          window.currentChatMessages.hasMore = false;
-        }
-
-        // 恢复滚动位置(保持在原来的消息位置)
-        // 使用 requestAnimationFrame 确保 DOM 更新完成后再设置滚动位置
-        requestAnimationFrame(() => {
-          const newScrollHeight = chatMessages.scrollHeight;
-          const addedHeight = newScrollHeight - oldScrollHeight;
-          const newScrollTop = oldScrollTop + addedHeight;
-
-          chatMessages.scrollTop = newScrollTop;
-
-          // 恢复消息轮询
-          setTimeout(() => {
-            window.messagePollingEnabled = wasPollingEnabled;
-          }, 100);
-        });
-      } catch (e) {
-        console.error("[UI] 加载更多消息失败:", e);
-        window.messagePollingEnabled = wasPollingEnabled;
-      } finally {
-        window.currentChatMessages.isLoading = false;
+      if (moreMessages.length === 0) {
+        state.hasMore = false;
+        return;
       }
+
+      const fragment = document.createDocumentFragment();
+      for (const message of moreMessages) {
+        if (!chatMessages.querySelector(`[data-msg-id="${message.id}"]`)) {
+          fragment.appendChild(createMessageElement(message, message.from_id === "me"));
+        }
+      }
+      chatMessages.insertBefore(fragment, chatMessages.firstChild);
+      state.loadedCount = chatMessages.querySelectorAll(
+        ':scope > .message[data-msg-id]',
+      ).length;
+      state.totalCount = state.loadedCount;
+      state.hasMore = moreMessages.length === pageSize;
+      chatRenderController.observeMessages(chatMessages);
+
+      requestAnimationFrame(() => {
+        if (chatRenderController.isCurrent(snapshot)) {
+          chatRenderController.restoreVisibleAnchor(visibleAnchor, chatMessages);
+          chatRenderController.updateBottomButton();
+        }
+      });
+    } catch (error) {
+      console.error("[UI] 加载更多消息失败:", error);
+      showMessageActionToast("旧记录加载失败，上滑可重试");
+    } finally {
+      if (window.currentChatMessages === state) state.isLoading = false;
+      resumeMessagePolling();
     }
   };
 
-  // 添加滚动监听器
   chatMessages.addEventListener("scroll", window.handleChatScroll);
   window.scrollListenerAttached = true;
 }
@@ -1630,9 +1776,9 @@ function createMessageElement(message, isSent) {
           return;
         }
         // 立即切换为下载中状态，记录开始时间用于速度计算
-        const statusEl = fileContainer.closest(".message-file")?.nextSibling;
+        const statusEl = contentDiv.querySelector(".file-transfer-status");
         if (statusEl) {
-          statusEl.className = "file-downloading";
+          statusEl.className = "file-transfer-status file-downloading";
           statusEl.textContent = "0 MB/s";
         }
         console.log("[手动下载] 请求文件: msg_id=", senderMsgId, "from=", fromId, "addr=", senderAddr);
@@ -1904,37 +2050,38 @@ function createMessageElement(message, isSent) {
 
   // ---- 统一处理纯净版的状态展示 ----
   const statusDiv = document.createElement("div");
+  statusDiv.className = "file-transfer-status";
 
   // 优先级 1: 只要数据库中 status 是 pending,一律展示待上线
   if (message.status === "pending") {
-    statusDiv.className = "file-pending";
+    statusDiv.classList.add("file-pending");
     statusDiv.textContent = t("file_pending");
     statusDiv.dataset.fileStatus = "pending";
   } // 优先级 2: 如果不是 pending 且是文件,展示上传/下载进度
   else if (message.msg_type === "file") {
     if (message.file_status === "downloading") {
-      statusDiv.className = "file-downloading";
+      statusDiv.classList.add("file-downloading");
       statusDiv.textContent = "0 MB/s";
     } else if (message.file_status === "uploading") {
-      statusDiv.className = "file-uploading";
+      statusDiv.classList.add("file-uploading");
       statusDiv.textContent = "0 MB/s";
     } else if (message.file_status === "offered") {
-      statusDiv.className = "file-pending";
+      statusDiv.classList.add("file-pending");
       statusDiv.textContent = t("file_offered");
       statusDiv.dataset.fileStatus = "offered";
     } else if (message.file_status === "offering") {
-      statusDiv.className = "file-pending";
+      statusDiv.classList.add("file-pending");
       statusDiv.textContent = isSent ? t("file_offering") : t("file_offered");
       statusDiv.dataset.fileStatus = "offering";
     } else if (message.file_status === "invalid") {
-      statusDiv.className = "file-pending";
+      statusDiv.classList.add("file-pending");
       statusDiv.textContent = t("file_invalid");
       statusDiv.dataset.fileStatus = "invalid";
     }
     // 成功状态(sent/accepted/accepted)不再塞入任何多余的文本,保持极简
   }
 
-  if (statusDiv.className) {
+  if (message.msg_type === "file" || statusDiv.classList.length > 1) {
     contentDiv.appendChild(statusDiv);
   }
 
@@ -2015,39 +2162,39 @@ function onReceiveMessage(message) {
       const chatMessages = document.getElementById("chat-messages");
       const msgEl = chatMessages?.querySelector(`[data-sender-msg-id="${senderMsgId}"]`);
       if (msgEl) {
-        const statusDiv = msgEl.querySelector(".file-pending, .file-downloading, .file-uploading");
+        const statusDiv = msgEl.querySelector(".file-transfer-status");
         if (newStatus === "invalid") {
           if (statusDiv) {
-            statusDiv.className = "file-pending";
+            statusDiv.className = "file-transfer-status file-pending";
             statusDiv.textContent = t("file_invalid");
             statusDiv.dataset.fileStatus = "invalid";
           }
         } else if (newStatus === "sent") {
           // 发送完成 → 清空所有状态类
           if (statusDiv) {
-            statusDiv.className = "";
+            statusDiv.className = "file-transfer-status";
             statusDiv.textContent = "";
             delete statusDiv.dataset.fileStatus;
           }
         } else if (newStatus === "downloading") {
           if (statusDiv) {
-            statusDiv.className = "file-downloading";
+            statusDiv.className = "file-transfer-status file-downloading";
             statusDiv.textContent = "0 MB/s";
           }
         } else if (newStatus === "offering") {
           if (statusDiv) {
-            statusDiv.className = "file-pending";
+            statusDiv.className = "file-transfer-status file-pending";
             statusDiv.textContent = t("file_offering");
             statusDiv.dataset.fileStatus = "offering";
           }
         } else if (newStatus === "uploading") {
           if (statusDiv) {
-            statusDiv.className = "file-uploading";
+            statusDiv.className = "file-transfer-status file-uploading";
             statusDiv.textContent = "0 MB/s";
           }
         } else if (newStatus === "accepted") {
           if (statusDiv) {
-            statusDiv.className = "";
+            statusDiv.className = "file-transfer-status";
             statusDiv.textContent = "";
           }
         }
@@ -2071,7 +2218,7 @@ function onReceiveMessage(message) {
           : (speedMbps * 1000).toFixed(0) + " KB/s";
         // 下载完成 → 清空状态文字（通过 received >= total 判断）
         if (message.received >= message.total) {
-          statusDiv.className = "";
+          statusDiv.className = "file-transfer-status";
           statusDiv.textContent = "";
         }
       }
@@ -2088,10 +2235,10 @@ function onReceiveMessage(message) {
       msgEl = chatMessages?.querySelector(`[data-msg-id="${message.sender_msg_id}"]`);
     }
     if (msgEl) {
-      const statusDiv = msgEl.querySelector(".file-pending");
+      const statusDiv = msgEl.querySelector(".file-transfer-status");
       if (statusDiv) {
         statusDiv.textContent = "0 MB/s";
-        statusDiv.className = "file-uploading";
+        statusDiv.className = "file-transfer-status file-uploading";
       }
     }
     return;
@@ -2099,6 +2246,7 @@ function onReceiveMessage(message) {
 
   // 仅在当前聊天窗口时处理
   if (window.currentChatPeer && window.currentChatPeer.id === message.from_id) {
+    const renderSession = chatRenderController.snapshot(message.from_id);
     // —— 模型切换完成/失败时，重置按钮状态 ——
     if (window._switchingModel) {
       const text = message.content || "";
@@ -2112,11 +2260,9 @@ function onReceiveMessage(message) {
 
     // 流式消息处理
     if (message.is_streaming === true) {
+      const shouldFollow = chatRenderController.followLatest;
       updateStreamMessage(message);
-      // 用户主动上滚时暂停自动跟随，回到底部后恢复
-      if (!window._userScrolledAway) {
-        setTimeout(async () => { await scrollToBottom(); }, 10);
-      }
+      if (shouldFollow) chatRenderController.scheduleFollowCorrection(renderSession);
       return;
     }
     if (message.is_streaming === false) {
@@ -2133,8 +2279,8 @@ function onReceiveMessage(message) {
       if (message.timestamp > (window.lastMessageTimestamp || 0)) {
         window.lastMessageTimestamp = message.timestamp;
       }
-      if (!window._userScrolledAway) {
-        setTimeout(async () => { await scrollToBottom(); }, 10);
+      if (chatRenderController.followLatest) {
+        chatRenderController.scheduleFollowCorrection(renderSession);
       } else {
         // 用户不在底部时，显示红点并触发通知
         const scrollBtn = document.getElementById("scroll-to-bottom-btn");
@@ -2176,16 +2322,13 @@ function onReceiveMessage(message) {
 
 
 
-    const chatMessages = document.getElementById("chat-messages");
     const scrollBtn = document.getElementById("scroll-to-bottom-btn");
-    const wasAtBottom = !scrollBtn || !scrollBtn.classList.contains("show");
+    const shouldFollow = chatRenderController.followLatest;
 
     addMessageToChat(message, false);
 
-    if (wasAtBottom) {
-        setTimeout(async () => {
-          await scrollToBottom();
-        }, 10);
+    if (shouldFollow) {
+        chatRenderController.scheduleFollowCorrection(renderSession);
         if (document.hidden || !document.hasFocus()) {
           showIncomingSystemNotification(message);
         }
@@ -2266,8 +2409,9 @@ function onReceiveMessage(message) {
 }
 
 // 通过文件路径发送文件(桌面端零拷贝,直接从硬盘读取)
-async function sendFileByPath(filePath) {
-  if (!window.currentChatPeer) return;
+async function sendFileByPath(filePath, targetPeer = window.currentChatPeer) {
+  const target = captureChatTarget(targetPeer);
+  if (!target) return;
   const tauri = window.__TAURI__;
   if (!tauri) return;
 
@@ -2279,24 +2423,24 @@ async function sendFileByPath(filePath) {
     }
 
     await apiSendFile(
-      window.currentChatPeer.id,
-      window.currentChatPeer.addr,
+      target.peer.id,
+      target.peer.addr,
       null,
       actualPath,
     );
 
     // 纯洁地刷新
-    await loadChatHistory(window.currentChatPeer.id, true);
-    await scrollToBottom();
+    await refreshCapturedChat(target, { forceLatest: true });
   } catch (e) {
     alert("文件发送失败: " + e.message);
-    await loadChatHistory(window.currentChatPeer.id, true);
+    await refreshCapturedChat(target);
   }
 }
 
 // 发送文件
-async function sendFile(file) {
-  if (!window.currentChatPeer) return;
+async function sendFile(file, targetPeer = window.currentChatPeer) {
+  const target = captureChatTarget(targetPeer);
+  if (!target) return;
 
   const tauri = window.__TAURI__;
 
@@ -2311,15 +2455,14 @@ async function sendFile(file) {
 
         // 调用后端命令
         await apiSendFile(
-          window.currentChatPeer.id,
-          window.currentChatPeer.addr,
+          target.peer.id,
+          target.peer.addr,
           null,
           tempFilePath,
         );
 
         // 发送完刷新数据库渲染
-        await loadChatHistory(window.currentChatPeer.id, true);
-        await scrollToBottom();
+        await refreshCapturedChat(target, { forceLatest: true });
 
         try {
           await tauri.fs.remove(tempFilePath);
@@ -2330,12 +2473,11 @@ async function sendFile(file) {
     } else {
       try {
         await apiSendFile(
-          window.currentChatPeer.id,
-          window.currentChatPeer.addr,
+          target.peer.id,
+          target.peer.addr,
           null,
         );
-        await loadChatHistory(window.currentChatPeer.id, true);
-        await scrollToBottom();
+        await refreshCapturedChat(target, { forceLatest: true });
       } catch (e) {
         console.error("[UI] 文件发送失败:", e);
         alert("文件发送失败: " + e.message);
@@ -2345,18 +2487,17 @@ async function sendFile(file) {
     // Web 端
     try {
       await apiSendFile(
-        window.currentChatPeer.id,
-        window.currentChatPeer.addr,
+        target.peer.id,
+        target.peer.addr,
         file,
       );
 
       // 完成后刷新 UI
-      await loadChatHistory(window.currentChatPeer.id, true);
-      await scrollToBottom();
+      await refreshCapturedChat(target, { forceLatest: true });
     } catch (e) {
       console.error("[UI] ✗ 文件发送失败:", e);
       alert("文件发送失败: " + e.message);
-      await loadChatHistory(window.currentChatPeer.id, true);
+      await refreshCapturedChat(target);
     }
   }
 }
@@ -4071,10 +4212,8 @@ function initScrollToBottomBtn() {
 
   // 2. 绑定点击事件:平滑滚动到底部
   btn.addEventListener("click", () => {
-    chatMessages.scrollTo({
-      top: chatMessages.scrollHeight,
-      behavior: "smooth", // 增加平滑滚动效果
-    });
+    chatRenderController.followLatest = true;
+    chatRenderController.scrollToLatest({ force: true, behavior: "smooth" });
     // 隐藏未读红点
     const unreadDot = document.getElementById("unread-dot");
     if (unreadDot) {
@@ -4092,26 +4231,9 @@ function initScrollToBottomBtn() {
 
   // 3. 监听滚动事件,控制显示/隐藏 和 自动跟随状态
   chatMessages.addEventListener("scroll", () => {
-    const isAtBottom = chatMessages.scrollHeight - chatMessages.scrollTop -
-        chatMessages.clientHeight < 10;
-
-    if (isAtBottom) {
-      // 滚到底部了,隐藏按钮
-      btn.classList.remove("show");
-      window._userScrolledAway = false;
-
-      // 滚到底部时必须清除红点状态
-      const unreadDot = document.getElementById("unread-dot");
-      if (unreadDot) {
-        unreadDot.classList.remove("show");
-      }
-      // 同步托盘闪烁状态（手动滚动到底部也应停止闪烁）
-      updateTrayFlash();
-    } else {
-      // 不在底部,按钮应该显示(但不一定有红点,红点由新消息触发)
-      btn.classList.add("show");
-      window._userScrolledAway = true;
-    }
+    const wasFollowing = chatRenderController.followLatest;
+    chatRenderController.handleScroll();
+    if (!wasFollowing && chatRenderController.followLatest) updateTrayFlash();
   });
 }
 
@@ -4287,7 +4409,10 @@ function toggleMessageSelection(messageElement) {
   if (!msgId || isNaN(msgId)) {
     console.warn("[UI] 发现没有合法 ID 的幽灵消息,强制刷新界面...");
     if (window.currentChatPeer) {
-      loadChatHistory(window.currentChatPeer.id, true);
+      const target = captureChatTarget();
+      refreshCapturedChat(target).catch((error) => {
+        console.error("[UI] 纠正消息列表失败:", error);
+      });
     }
     return;
   }
@@ -4402,34 +4527,56 @@ function initLongPressSelectMode() {
 function showConfirm(message, onOk) {
   const overlay = document.createElement("div");
   overlay.className = "confirm-dialog-overlay";
+  overlay.setAttribute("role", "presentation");
 
-  overlay.innerHTML = `
-        <div class="confirm-dialog-content">
-            <p>${message}</p>
-            <div class="confirm-button-group">
-                <button class="confirm-btn-ok" id="confirm-ok">确定</button>
-                <button class="confirm-btn-cancel" id="confirm-cancel">取消</button>
-            </div>
-        </div>
-    `;
+  const dialog = document.createElement("div");
+  dialog.className = "confirm-dialog-content";
+  dialog.setAttribute("role", "alertdialog");
+  dialog.setAttribute("aria-modal", "true");
+
+  const messageElement = document.createElement("p");
+  messageElement.textContent = message;
+  const buttonGroup = document.createElement("div");
+  buttonGroup.className = "confirm-button-group";
+  const okButton = document.createElement("button");
+  okButton.className = "confirm-btn-ok";
+  okButton.type = "button";
+  okButton.textContent = "确定";
+  const cancelButton = document.createElement("button");
+  cancelButton.className = "confirm-btn-cancel";
+  cancelButton.type = "button";
+  cancelButton.textContent = "取消";
+  buttonGroup.append(okButton, cancelButton);
+  dialog.append(messageElement, buttonGroup);
+  overlay.appendChild(dialog);
 
   document.body.appendChild(overlay);
+  const closeConfirm = () => {
+    overlay.remove();
+    if (!document.getElementById("user-mgmt-panel") && window.userListSortPending) {
+      sortUserList(true);
+    }
+  };
 
   // 取消:直接移除 DOM
-  document.getElementById("confirm-cancel").onclick = () => overlay.remove();
+  cancelButton.onclick = closeConfirm;
+  overlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") cancelButton.click();
+  });
+  cancelButton.focus();
 
   // 确定:拦截处理状态,并执行传入的 onOk 回调
-  document.getElementById("confirm-ok").onclick = async () => {
-    const btn = document.getElementById("confirm-ok");
-    btn.disabled = true;
-    btn.textContent = "处理中...";
+  okButton.onclick = async () => {
+    okButton.disabled = true;
+    cancelButton.disabled = true;
+    okButton.textContent = "处理中...";
     try {
       await onOk(); // 这里才真正执行删除动作
     } catch (e) {
       console.error("执行失败:", e);
       alert("操作失败: " + e.message);
     } finally {
-      overlay.remove(); // 无论成功失败,都关闭确认弹窗
+      closeConfirm(); // 无论成功失败,都关闭确认弹窗
     }
   };
 }
@@ -4443,7 +4590,14 @@ async function showUserActionDialog(peerId, userName) {
   const isOffline = userLi ? userLi.classList.contains("offline") : true;
 
   // 2. 检测是否有聊天记录
-  const history = await apiGetChatHistory(peerId, 1, 0);
+  let history;
+  try {
+    history = await apiGetChatHistory(peerId, 1, 0);
+  } catch (error) {
+    console.error("[UI] 读取用户聊天记录失败:", error);
+    showMessageActionToast("聊天记录读取失败，请稍后重试");
+    return;
+  }
   const hasHistory = history && history.length > 0;
 
   // 如果是在线用户,且连聊天记录都没有,那完全没有任何可管理的操作,直接忽略长按/右键
@@ -4479,16 +4633,19 @@ async function showUserActionDialog(peerId, userName) {
   buttonsHtml +=
     `<button id="mgmt-cancel-btn" class="btn-cancel-custom">取消</button>`;
 
-  panel.innerHTML = `
-        <h2>管理 ${userName}</h2>
-        <div style="display: flex; flex-direction: column; gap: 15px; margin-top: 20px;">
-            ${buttonsHtml}
-        </div>
-    `;
+  const title = document.createElement("h2");
+  title.textContent = `管理 ${userName}`;
+  const actions = document.createElement("div");
+  actions.className = "user-mgmt-actions";
+  actions.innerHTML = buttonsHtml;
+  panel.append(title, actions);
 
   document.body.appendChild(panel);
 
-  const closeMgmt = () => panel.remove();
+  const closeMgmt = () => {
+    panel.remove();
+    if (window.userListSortPending) sortUserList(true);
+  };
   document.getElementById("mgmt-cancel-btn").onclick = closeMgmt;
 
   // --- 绑定删除逻辑 (注意加判空,因为在线用户没有这个按钮) ---
@@ -4526,7 +4683,19 @@ async function showUserActionDialog(peerId, userName) {
 
         if (window.currentChatPeer && window.currentChatPeer.id === peerId) {
           const box = document.getElementById("chat-messages");
-          if (box) box.innerHTML = "";
+          const session = chatRenderController.begin(peerId);
+          if (box) {
+            box.replaceChildren();
+            chatRenderController.ensureBottomAnchor(box);
+          }
+          window.currentChatMessages = {
+            peerId,
+            sessionId: session.sessionId,
+            loadedCount: 0,
+            totalCount: 0,
+            hasMore: false,
+            isLoading: false,
+          };
           window.lastMessageTimestamp = 0;
           // 清空后隐藏滚动按钮
           const btn = document.getElementById("scroll-to-bottom-btn");
