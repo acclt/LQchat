@@ -1,6 +1,66 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+#[cfg(windows)]
+pub const WINDOWS_DATABASE_FILE_NAME: &str = "LQChat.db";
+
+#[cfg(windows)]
+pub fn windows_portable_root() -> Result<PathBuf, String> {
+    let executable =
+        std::env::current_exe().map_err(|error| format!("无法读取 LQChat 程序路径: {error}"))?;
+    executable
+        .parent()
+        .map(PathBuf::from)
+        .ok_or_else(|| "LQChat 程序路径缺少父目录".to_string())
+}
+
+#[cfg(windows)]
+pub fn windows_portable_data_dir() -> Result<PathBuf, String> {
+    Ok(windows_portable_root()?.join("data"))
+}
+
+#[cfg(windows)]
+pub fn windows_portable_download_dir() -> Result<PathBuf, String> {
+    Ok(windows_portable_root()?.join("downloads"))
+}
+
+#[cfg(windows)]
+pub fn windows_portable_webview_dir() -> Result<PathBuf, String> {
+    Ok(windows_portable_root()?.join("cache").join("EBWebView"))
+}
+
+pub fn custom_theme_dir() -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    {
+        Ok(windows_portable_root()?.join("config"))
+    }
+
+    #[cfg(not(windows))]
+    {
+        dirs::home_dir()
+            .map(|home| home.join(".config").join("lanchat"))
+            .ok_or_else(|| "无法获取用户主目录".to_string())
+    }
+}
+
+#[cfg(windows)]
+pub fn prepare_windows_portable_layout() -> Result<(), String> {
+    for directory in [
+        windows_portable_root()?.join("config"),
+        windows_portable_data_dir()?,
+        windows_portable_download_dir()?,
+        windows_portable_webview_dir()?,
+    ] {
+        std::fs::create_dir_all(&directory)
+            .map_err(|error| format!("无法创建便携目录 {}: {error}", directory.display()))?;
+    }
+
+    if !config_path().is_file() {
+        write_config(&Config::default())?;
+    }
+    Ok(())
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -24,20 +84,31 @@ impl Default for Config {
     }
 }
 
-/// 配置文件路径（平台标准配置目录下）
+/// 配置文件路径。
+/// Windows 便携版: <LQChat.exe>\config\config.json
 /// Linux:   ~/.config/lanchat/config.json
 /// macOS:   ~/Library/Application Support/lanchat/config.json
-/// Windows: %APPDATA%\lanchat\config.json
 /// Android: /data/data/com.lanchat.app/.config/lanchat/config.json
 fn config_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".config")
-        })
-        .join("lanchat")
-        .join("config.json")
+    #[cfg(windows)]
+    {
+        windows_portable_root()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("config")
+            .join("config.json")
+    }
+
+    #[cfg(not(windows))]
+    {
+        dirs::config_dir()
+            .unwrap_or_else(|| {
+                dirs::home_dir()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join(".config")
+            })
+            .join("lanchat")
+            .join("config.json")
+    }
 }
 
 /// 读取配置文件，不存在则返回默认值
@@ -91,18 +162,27 @@ pub fn resolve_db_dir(stored: &str) -> PathBuf {
 
 /// 获取平台默认的数据库目录（Web 端）
 pub fn get_default_db_dir() -> PathBuf {
-    dirs::data_dir()
-        .map(|p| p.join("com.lanchat.app"))
-        .unwrap_or_else(|| PathBuf::from(".").join("data"))
+    #[cfg(windows)]
+    {
+        windows_portable_data_dir().unwrap_or_else(|_| PathBuf::from(".").join("data"))
+    }
+
+    #[cfg(not(windows))]
+    {
+        dirs::data_dir()
+            .map(|p| p.join("com.lanchat.app"))
+            .unwrap_or_else(|| PathBuf::from(".").join("data"))
+    }
 }
 
 /// 获取平台默认的数据库路径（桌面端，使用 Tauri 的 app_data_dir）
 /// 仅在桌面端调用，Web 端用 get_default_db_dir()
 pub fn get_default_db_path() -> String {
-    get_default_db_dir()
-        .join("lanchat.db")
-        .to_string_lossy()
-        .to_string()
+    #[cfg(windows)]
+    let path = get_default_db_dir().join(WINDOWS_DATABASE_FILE_NAME);
+    #[cfg(not(windows))]
+    let path = get_default_db_dir().join("lanchat.db");
+    path.to_string_lossy().to_string()
 }
 
 /// 从配置读取端口，不存在返回 None

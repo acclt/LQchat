@@ -31,6 +31,9 @@ fn main() {
     std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1");
 
     #[cfg(windows)]
+    lanchat::config_file::prepare_windows_portable_layout().expect("无法初始化 LQChat 便携目录");
+
+    #[cfg(windows)]
     if let Err(error) = lanchat::commands::ensure_windows_notification_identity() {
         eprintln!("[Notification] {error}");
     }
@@ -45,6 +48,16 @@ fn main() {
     let cli_port = args.port;
     let cli_db_path = args.db_path;
     let launched_from_autostart = args.autostart;
+
+    let mut context = tauri::generate_context!();
+    #[cfg(windows)]
+    for window in &mut context.config_mut().app.windows {
+        if window.label == "main" {
+            // Windows WebView must be created manually so its absolute data directory can
+            // stay beside LQChat.exe instead of falling back to LocalAppData.
+            window.create = false;
+        }
+    }
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
@@ -156,6 +169,23 @@ fn main() {
             lanchat::commands::set_autostart_enabled,
         ])
         .setup(move |app| {
+            #[cfg(windows)]
+            {
+                let window_config = app
+                    .config()
+                    .app
+                    .windows
+                    .iter()
+                    .find(|window| window.label == "main")
+                    .cloned()
+                    .ok_or_else(|| std::io::Error::other("缺少 LQChat 主窗口配置"))?;
+                let webview_dir = lanchat::config_file::windows_portable_webview_dir()
+                    .map_err(std::io::Error::other)?;
+                tauri::WebviewWindowBuilder::from_config(app.handle(), &window_config)?
+                    .data_directory(webview_dir)
+                    .build()?;
+            }
+
             let handle = app.handle().clone();
 
             // 获取主窗口并设置关闭事件处理
@@ -394,7 +424,7 @@ fn main() {
 
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|_app, event| {
             #[cfg(windows)]

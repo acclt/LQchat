@@ -7,9 +7,10 @@
 KEYSTORE="lanchat-release.keystore"
 KEYSTORE_ALIAS="lanchat"
 APK_UNSIGNED="src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk"
-APK_SIGNED="lanchat-aarch64.apk"
+ANDROID_VERSION=$(sed -n 's/.*lanchatAndroidVersionName = "\([^"]*\)".*/\1/p' src-tauri/gen/android/app/build.gradle.kts)
+APK_SIGNED="LQChat-v${ANDROID_VERSION}-android-arm64.apk"
 
-echo "=== LANChat APK 签名工具 ==="
+echo "=== LQChat APK 签名工具 ==="
 echo ""
 
 # 检查是否存在密钥库
@@ -26,7 +27,7 @@ if [ ! -f "$KEYSTORE" ]; then
         -validity 10000 \
         -storepass android \
         -keypass android \
-        -dname "CN=LANChat, OU=Dev, O=LANChat, L=City, S=State, C=CN"
+        -dname "CN=LQChat, OU=Dev, O=LQChat, L=City, S=State, C=CN"
     
     if [ $? -ne 0 ]; then
         echo "❌ 密钥库创建失败"

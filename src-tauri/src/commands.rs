@@ -980,8 +980,7 @@ pub async fn get_theme_list() -> Result<Vec<serde_json::Value>, String> {
     ];
 
     // 检查自定义主题目录
-    let home_dir = dirs::home_dir().ok_or("无法获取用户主目录")?;
-    let theme_dir = home_dir.join(".config").join("lanchat");
+    let theme_dir = crate::config_file::custom_theme_dir()?;
 
     if theme_dir.exists() {
         if let Ok(entries) = std::fs::read_dir(&theme_dir) {
@@ -1026,11 +1025,7 @@ pub async fn get_theme_css(theme_name: String) -> Result<String, String> {
     }
 
     // 自定义主题从用户目录读取
-    let home_dir = dirs::home_dir().ok_or("无法获取用户主目录")?;
-    let theme_path = home_dir
-        .join(".config")
-        .join("lanchat")
-        .join(format!("{}.css", theme_name));
+    let theme_path = crate::config_file::custom_theme_dir()?.join(format!("{}.css", theme_name));
 
     if !theme_path.exists() {
         return Err(format!("主题文件不存在: {}", theme_path.display()));
@@ -1075,9 +1070,13 @@ pub async fn get_default_download_path(_state: State<'_, DbState>) -> Result<Str
         println!("[Command] Android 下载目标: {}", download_path);
         Ok(download_path)
     } else {
-        // 桌面端和 Web 端返回用户下载目录
-        let home_dir = dirs::home_dir().ok_or("无法获取用户主目录")?;
-        let download_path = home_dir.join("Downloads").join("LANChat");
+        #[cfg(windows)]
+        let download_path = crate::config_file::windows_portable_download_dir()?;
+        #[cfg(not(windows))]
+        let download_path = dirs::home_dir()
+            .ok_or("无法获取用户主目录")?
+            .join("Downloads")
+            .join("LQChat");
         println!("[Command] 默认下载路径: {}", download_path.display());
         Ok(download_path.to_string_lossy().to_string())
     }
@@ -2234,15 +2233,8 @@ pub fn ensure_windows_notification_identity() -> Result<(), String> {
         .parent()
         .map(PathBuf::from)
         .ok_or_else(|| "LQChat 路径缺少父目录".to_string())?;
-    let launch_script = working_directory.join("Start-LQChat.cmd");
-    // The versioned icon path deliberately changes for every release so Explorer cannot
-    // reuse a stale generic-icon cache entry from an earlier installation.
-    let shortcut_icon = working_directory.join("LQChat-shortcut-v7.4.ico");
-    let launch_target = if launch_script.is_file() {
-        &launch_script
-    } else {
-        &executable
-    };
+    let shortcut_icon = working_directory.join("LQChat.ico");
+    let launch_target = &executable;
     let icon_target = if shortcut_icon.is_file() {
         &shortcut_icon
     } else {
@@ -2258,8 +2250,8 @@ pub fn ensure_windows_notification_identity() -> Result<(), String> {
         .join("Programs");
     let start_menu_shortcut = shortcut_dir.join("LQChat.lnk");
     let mut shortcuts = vec![start_menu_shortcut.clone()];
-    // 只有安装包资源存在时才接管桌面快捷方式；开发构建不能覆盖用户桌面入口。
-    if launch_script.is_file() {
+    // 只有打包资源存在时才接管桌面快捷方式；开发构建不能覆盖用户桌面入口。
+    if shortcut_icon.is_file() {
         if let Some(desktop_dir) = dirs::desktop_dir() {
             shortcuts.push(desktop_dir.join("LQChat.lnk"));
         }

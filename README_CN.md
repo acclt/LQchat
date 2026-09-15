@@ -9,7 +9,7 @@
 
 ## 本仓库版本
 
-本仓库基于 [cap153/LANChat](https://github.com/cap153/LANChat) 继续开发，重点增强 Windows 与 Android 的日常使用体验：
+本仓库基于 [cap153 的上游项目](https://github.com/cap153/LANChat) 继续开发，重点增强 Windows 与 Android 的日常使用体验：
 
 - Android 聊天页采用双层输入栏，并提供内嵌半屏相册。
 - Android 支持多选图片、文件和已安装 App；App 选择网格同步显示图标与应用名称。
@@ -73,7 +73,7 @@ cargo tauri android build --target aarch64
 
 # windows桌面端
 cd src-tauri
-cargo xwin build --release --bin lanchat --target x86_64-pc-windows-msvc
+cargo xwin build --release --bin LQChat --target x86_64-pc-windows-msvc
 
 # Web 端（精简版，无 GUI 依赖）
 cd src-tauri
@@ -100,7 +100,7 @@ make help         # 查看帮助
 
 ```bash
 # 桌面端
-lanchat
+LQChat
 
 # Web 端
 lanchat-web
@@ -110,7 +110,7 @@ CLI 参数 `--port` 和 `--db-path` 会覆盖配置文件中的对应设置，�
 
 ```bash
 # Web 端/桌面端
-lanchat --port 8889 --db-path /custom/path/lanchat.db
+LQChat --port 8889 --db-path /custom/path/LQChat.db
 ```
 
 > [!TIP]
@@ -135,16 +135,28 @@ sudo ufw allow 8888/udp
 支持自定义`css`，文件名称随意，存储路径：
 
 - **Linux**: `~/.config/lanchat/`
-- **Windows**: `%APPDATA%\.config\lanchat`
+- **Windows 便携版**: `<LQChat.exe 所在目录>\config`
 
-可以参考内置的主题：[https://github.com/acclt/LANChat/tree/main/src/css](https://github.com/acclt/LANChat/tree/main/src/css)
+可以参考[上游主题目录](https://github.com/acclt/LANChat/tree/main/src/css)中的内置主题。
 
 ## 配置文件
 
 端口和语言等设置存储在 `config.json` 中，CLI 参数 `--port` 和 `--db-path` 拥有最高优先级。
 
+Windows 便携包解压后的目录结构如下，首次启动会在这些目录中生成实际数据：
+
+```text
+LQChat-Portable\
+├─ LQChat.exe
+├─ LQChat.ico
+├─ data\LQChat.db
+├─ config\config.json
+├─ downloads\
+└─ cache\EBWebView\
+```
+
 - **Linux**: `~/.config/lanchat/config.json`
-- **Windows**: `%APPDATA%\lanchat\config.json`
+- **Windows 便携版**: `<LQChat.exe 所在目录>\config\config.json`
 - **macOS**: `~/Library/Application Support/lanchat/config.json`
 
 配置文件内容：
@@ -168,9 +180,9 @@ sudo ufw allow 8888/udp
 桌面端和 Web 端共享同一个数据库：
 
 - **Linux**: `~/.local/share/com.lanchat.app/lanchat.db`
-- **Windows**: `%APPDATA%\com.lanchat.app\lanchat.db`
+- **Windows 便携版**: `<LQChat.exe 所在目录>\data\LQChat.db`
 
-可在设置面板中修改数据库路径，修改后需重启生效。路径存储在 `~/.config/lanchat/config.json`。
+可在设置面板中修改数据库路径，修改后需重启生效。Windows 便携版的路径配置存储在同级 `config\config.json` 中。
 
 ## 功能状态
 
@@ -224,7 +236,7 @@ sudo ufw allow 8888/udp
 - [x] Android SAF 持久化权限 + 零拷贝 FD 缓存双轨机制
 - [x] Android SAF 原生文件选择器（`ACTION_OPEN_DOCUMENT` + `takePersistableUriPermission`）
 - [x] 文件传输速度实时显示
-- [x] 配置文件路径按平台标准（Linux `~/.config/`、Windows `%APPDATA%`）
+- [x] 配置文件路径按平台规则存储（Linux `~/.config/`、Windows 便携目录）
 - [x] 中英文界面（自动检测系统语言 + 手动切换 + 托盘热更新）
 
 ### 🚧 进行中
@@ -235,7 +247,7 @@ sudo ufw allow 8888/udp
 ## 项目结构
 
 ```
-LANChat/
+LQChat/
 ├── src/                      # 前端代码
 │   ├── css/
 │   │   ├── style.css        # 样式文件
@@ -304,11 +316,11 @@ desktop文件加上`Exec=env __NV_DISABLE_EXPLICIT_SYNC=1 lanchat`环境变量
 
 ## Android 后台接收
 
-Android 版在用户显式打开 LANChat 后启动同进程前台服务，并在通知栏显示独立的常驻状态通知。按 Home、切换应用、锁屏或普通 Activity 重建不会重复启动网络核心；从最近任务划掉 LANChat 则视为主动退出，会停止服务并释放 UDP/HTTP 端口和系统锁。
+Android 版在用户显式打开 LQChat 后启动同进程前台服务，并在通知栏显示独立的常驻状态通知。按 Home、切换应用、锁屏或普通 Activity 重建不会重复启动网络核心；从最近任务划掉 LQChat 则视为主动退出，会停止服务并释放 UDP/HTTP 端口和系统锁。
 
 设置页可查看后台接收、通知权限和电池优化状态，也可进入系统电池设置或执行“停止后台接收并退出”。系统杀进程、手机重启、用户强制停止以及划掉任务后都不会自动恢复；再次显式打开 App 才开始新的运行会话。
 
-Android 深度 Doze 和部分厂商 ROM 仍可能延迟局域网通信。需要更可靠的息屏接收时，请把 LANChat 的电池策略设为“不受限制”。组播发现和已知 IP 直连是两条不同链路，应分别验证。
+Android 深度 Doze 和部分厂商 ROM 仍可能延迟局域网通信。需要更可靠的息屏接收时，请把 LQChat 的电池策略设为“不受限制”。组播发现和已知 IP 直连是两条不同链路，应分别验证。
 
 ## 技术栈
 

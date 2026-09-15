@@ -1,8 +1,8 @@
 [package]
 name = "lanchat"
-version = "7.4.0"
+version = "10.0.0"
 edition = "2021"
-default-run = "lanchat"
+default-run = "LQChat"
 
 [lib]
 name = "lanchat"
@@ -10,7 +10,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 # 定义两个独立的二进制入口
 [[bin]]
-name = "lanchat"
+name = "LQChat"
 path = "src/main.rs"
 required-features = ["desktop"]
 

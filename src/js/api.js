@@ -147,7 +147,7 @@ async function apiGetDefaultDownloadPath() {
       return "";
     }
   } else {
-    return "/tmp/lanchat";
+    return "/tmp/LQChat";
   }
 }
 

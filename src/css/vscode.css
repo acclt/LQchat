@@ -538,7 +538,7 @@ body {
 
 /* 终端 Prompt */
 .chat-input-container::after {
-	content: "➜  lan-chat git:(main) ✗ cargo run";
+	content: "➜  LQChat git:(main) ✗ cargo run";
 	position: absolute;
 	top: 35px;
 	left: 15px;

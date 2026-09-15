@@ -205,11 +205,12 @@ async fn get_settings_http(State(state): State<Arc<AppState>>) -> impl IntoRespo
     let download_path = crate::db::get_download_path(&state.pool)
         .await
         .unwrap_or_else(|_| {
-            std::env::temp_dir()
-                .join("lanchat_downloads")
-                .to_str()
-                .unwrap()
-                .to_string()
+            #[cfg(windows)]
+            let path = crate::config_file::windows_portable_download_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("downloads"));
+            #[cfg(not(windows))]
+            let path = std::env::temp_dir().join("lanchat_downloads");
+            path.to_string_lossy().to_string()
         });
 
     let port = crate::config_file::get_port_from_config()
@@ -2409,7 +2410,12 @@ async fn get_download_dir(pool: &Pool<Sqlite>) -> std::path::PathBuf {
         Ok(path) => std::path::PathBuf::from(path),
         Err(_) => {
             // 默认路径
-            std::env::temp_dir().join("lanchat_downloads")
+            #[cfg(windows)]
+            let path = crate::config_file::windows_portable_download_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("downloads"));
+            #[cfg(not(windows))]
+            let path = std::env::temp_dir().join("lanchat_downloads");
+            path
         }
     }
 }
@@ -2651,9 +2657,7 @@ async fn get_theme_list_http() -> impl IntoResponse {
     ];
 
     // 检查自定义主题目录
-    if let Some(home_dir) = dirs::home_dir() {
-        let theme_dir = home_dir.join(".config").join("lanchat");
-
+    if let Ok(theme_dir) = crate::config_file::custom_theme_dir() {
         if theme_dir.exists() {
             if let Ok(entries) = std::fs::read_dir(&theme_dir) {
                 for entry in entries {
@@ -2713,11 +2717,8 @@ async fn get_theme_css_http(Path(theme_name): Path<String>) -> impl IntoResponse
     }
 
     // 自定义主题从用户目录读取
-    if let Some(home_dir) = dirs::home_dir() {
-        let theme_path = home_dir
-            .join(".config")
-            .join("lanchat")
-            .join(format!("{}.css", theme_name));
+    if let Ok(theme_dir) = crate::config_file::custom_theme_dir() {
+        let theme_path = theme_dir.join(format!("{}.css", theme_name));
 
         if theme_path.exists() {
             match std::fs::read_to_string(&theme_path) {

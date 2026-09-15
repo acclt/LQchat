@@ -5,11 +5,11 @@
 >
 > 📖 [中文文档](README_CN.md)
 
-<img width="1923" height="2104" alt="LANChat screenshot" src="https://github.com/user-attachments/assets/454c170a-272a-4997-b096-569fc7c4dc53" />
+<img width="1923" height="2104" alt="LQChat screenshot" src="https://github.com/user-attachments/assets/454c170a-272a-4997-b096-569fc7c4dc53" />
 
 ## About This Version
 
-This repository continues the work of [cap153/LANChat](https://github.com/cap153/LANChat), with a focus on the everyday Windows and Android experience:
+This repository continues the work of [cap153's upstream project](https://github.com/cap153/LANChat), with a focus on the everyday Windows and Android experience:
 
 - A redesigned Android chat composer with an in-chat half-screen gallery.
 - Multi-select images, files, and installed apps on Android; app tiles show both the icon and app name.
@@ -73,7 +73,7 @@ cargo tauri android build --target aarch64
 
 # Windows desktop
 cd src-tauri
-cargo xwin build --release --bin lanchat --target x86_64-pc-windows-msvc
+cargo xwin build --release --bin LQChat --target x86_64-pc-windows-msvc
 
 # Web (lightweight, no GUI dependencies)
 cd src-tauri
@@ -100,7 +100,7 @@ make help         # Show help
 
 ```bash
 # Desktop
-lanchat
+LQChat
 
 # Web
 lanchat-web
@@ -110,7 +110,7 @@ CLI arguments `--port` and `--db-path` override config file settings with highes
 
 ```bash
 # Web / Desktop
-lanchat --port 8889 --db-path /custom/path/lanchat.db
+LQChat --port 8889 --db-path /custom/path/LQChat.db
 ```
 
 > [!TIP]
@@ -135,16 +135,28 @@ sudo ufw allow 8888/udp
 Place custom `.css` files in the config directory (any filename):
 
 - **Linux**: `~/.config/lanchat/`
-- **Windows**: `%APPDATA%\.config\lanchat`
+- **Windows portable**: `<directory containing LQChat.exe>\config`
 
-See built-in themes for reference: [https://github.com/acclt/LANChat/tree/main/src/css](https://github.com/acclt/LANChat/tree/main/src/css)
+See the built-in themes in the [upstream theme directory](https://github.com/acclt/LANChat/tree/main/src/css).
 
 ## Config File
 
 Port, language, and other settings are stored in `config.json`. CLI arguments `--port` and `--db-path` take highest priority.
 
+The Windows portable archive has the following layout. Actual data files are generated in these directories on first launch:
+
+```text
+LQChat-Portable\
+├─ LQChat.exe
+├─ LQChat.ico
+├─ data\LQChat.db
+├─ config\config.json
+├─ downloads\
+└─ cache\EBWebView\
+```
+
 - **Linux**: `~/.config/lanchat/config.json`
-- **Windows**: `%APPDATA%\lanchat\config.json`
+- **Windows portable**: `<directory containing LQChat.exe>\config\config.json`
 - **macOS**: `~/Library/Application Support/lanchat/config.json`
 
 Example content:
@@ -168,9 +180,9 @@ Example content:
 Desktop and Web share the same database:
 
 - **Linux**: `~/.local/share/com.lanchat.app/lanchat.db`
-- **Windows**: `%APPDATA%\com.lanchat.app\lanchat.db`
+- **Windows portable**: `<directory containing LQChat.exe>\data\LQChat.db`
 
-The database path can be changed in settings (requires restart). The path is stored in `~/.config/lanchat/config.json`.
+The database path can be changed in settings (requires restart). On Windows portable builds, the path setting is stored in the adjacent `config\config.json` file.
 
 ## Feature Status
 
@@ -224,7 +236,7 @@ The database path can be changed in settings (requires restart). The path is sto
 - [x] Android SAF persistable permissions + zero-copy FD cache dual-track
 - [x] Android SAF native file picker (`ACTION_OPEN_DOCUMENT` + `takePersistableUriPermission`)
 - [x] Real-time file transfer speed display
-- [x] Platform-standard config paths (Linux `~/.config/`, Windows `%APPDATA%`)
+- [x] Platform-specific config paths (Linux `~/.config/`, Windows portable directory)
 - [x] i18n (auto-detect + manual switch + tray hot-reload)
 
 ### 🚧 In Progress
@@ -235,7 +247,7 @@ The database path can be changed in settings (requires restart). The path is sto
 ## Project Structure
 
 ```
-LANChat/
+LQChat/
 ├── src/                      # Frontend
 │   ├── css/
 │   │   ├── style.css        # Main stylesheet
@@ -305,11 +317,11 @@ When devices are on different VLANs or connected via WireGuard, UDP broadcast wo
 
 ## Android Background Receiving
 
-After the user explicitly opens LANChat, the Android app starts an in-process foreground service with its own persistent status notification. Pressing Home, switching apps, locking the screen, or a normal Activity recreation does not create a second network core. Swiping LANChat from Recents is treated as an explicit exit and releases the service, UDP/HTTP ports, notifications, and system locks.
+After the user explicitly opens LQChat, the Android app starts an in-process foreground service with its own persistent status notification. Pressing Home, switching apps, locking the screen, or a normal Activity recreation does not create a second network core. Swiping LQChat from Recents is treated as an explicit exit and releases the service, UDP/HTTP ports, notifications, and system locks.
 
 The Settings panel shows the background-receive, notification-permission, and battery-optimization states. It also links to Android battery settings and provides “Stop background receiving and exit.” The app does not auto-recover after process death, device reboot, force-stop, or a Recents swipe; opening the app explicitly starts a new session.
 
-Deep Doze and vendor-specific battery policies can still delay LAN traffic. For higher screen-off reliability, set LANChat to unrestricted battery use. Multicast discovery and direct communication with a known IP are separate paths and should be tested independently.
+Deep Doze and vendor-specific battery policies can still delay LAN traffic. For higher screen-off reliability, set LQChat to unrestricted battery use. Multicast discovery and direct communication with a known IP are separate paths and should be tested independently.
 
 ## Tech Stack
 

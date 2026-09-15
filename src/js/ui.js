@@ -3015,7 +3015,7 @@ function initSettings() {
         // fall through
       }
     }
-    return "/tmp/lanchat";
+    return "/tmp/LQChat";
   }
 
   // 打开/关闭设置面板 - 切换显示/隐藏
@@ -3174,7 +3174,7 @@ function initSettings() {
 
         if (selected) {
           const path = Array.isArray(selected) ? selected[0] : selected;
-          dbPathInput.value = path + "/lanchat.db";
+          dbPathInput.value = path + "/LQChat.db";
           settingsErrorMsg.textContent = "";
         }
       } catch (e) {

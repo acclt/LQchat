@@ -4,10 +4,12 @@ use std::path::PathBuf;
 
 pub const CHAT_RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
 pub const CHAT_RETENTION_SWEEP_SECS: u64 = 24 * 60 * 60;
+#[cfg(windows)]
+const WINDOWS_PORTABLE_DOWNLOAD_SENTINEL: &str = "$LQCHAT_PORTABLE/downloads";
 
 #[cfg(feature = "desktop")]
 use tauri::AppHandle;
-#[cfg(feature = "desktop")]
+#[cfg(all(feature = "desktop", not(windows)))]
 use tauri::Manager;
 
 pub struct DbState {
@@ -86,7 +88,14 @@ pub async fn get_download_path(pool: &sqlx::Pool<sqlx::Sqlite>) -> Result<String
             .await;
 
     match res {
-        Ok((path,)) => Ok(path),
+        Ok((path,)) => {
+            #[cfg(windows)]
+            if path == WINDOWS_PORTABLE_DOWNLOAD_SENTINEL {
+                return crate::config_file::windows_portable_download_dir()
+                    .map(|directory| directory.to_string_lossy().to_string());
+            }
+            Ok(path)
+        }
         Err(_) => {
             // 如果没有设置，返回默认路径
             if cfg!(target_os = "android") {
@@ -94,9 +103,15 @@ pub async fn get_download_path(pool: &sqlx::Pool<sqlx::Sqlite>) -> Result<String
                     .join("lanchat_received_files")
                     .to_string_lossy()
                     .to_string())
+            } else if cfg!(windows) {
+                #[cfg(windows)]
+                return crate::config_file::windows_portable_download_dir()
+                    .map(|path| path.to_string_lossy().to_string());
+                #[cfg(not(windows))]
+                unreachable!();
             } else {
                 let home_dir = dirs::home_dir().ok_or("cannot get home directory")?;
-                let default_path = home_dir.join("Downloads").join("LANChat");
+                let default_path = home_dir.join("Downloads").join("LQChat");
                 Ok(default_path.to_string_lossy().to_string())
             }
         }
@@ -141,8 +156,20 @@ pub async fn update_download_path(
         }
     }
 
+    #[cfg(windows)]
+    let stored_path = {
+        let portable_default = crate::config_file::windows_portable_download_dir()?;
+        if std::path::Path::new(trimmed) == portable_default {
+            WINDOWS_PORTABLE_DOWNLOAD_SENTINEL
+        } else {
+            trimmed
+        }
+    };
+    #[cfg(not(windows))]
+    let stored_path = trimmed;
+
     sqlx::query("INSERT OR REPLACE INTO settings (key, value) VALUES ('download_path', ?)")
-        .bind(trimmed)
+        .bind(stored_path)
         .execute(pool)
         .await
         .map_err(|e| e.to_string())?;
@@ -154,7 +181,13 @@ pub async fn update_download_path(
 // 为 Tauri 桌面端初始化数据库
 #[cfg(feature = "desktop")]
 pub async fn init_db(app_handle: &AppHandle) -> Result<Pool<Sqlite>, sqlx::Error> {
+    #[cfg(windows)]
+    let app_dir = crate::config_file::windows_portable_data_dir()
+        .map_err(|error| sqlx::Error::Io(std::io::Error::other(error)))?;
+    #[cfg(not(windows))]
     let app_dir = app_handle.path().app_data_dir().expect("读取路径失败");
+    #[cfg(windows)]
+    let _ = app_handle;
     init_db_with_path(app_dir).await
 }
 
@@ -183,9 +216,15 @@ fn default_download_dir(app_dir: &std::path::Path) -> PathBuf {
         // Android 10+ 的分区存储不允许 targetSdk 36 应用直接用 std::fs 写公共 Download。
         // 接收文件保存在应用专属持久目录，并继续由 LANChat 提供下载和预览。
         app_dir.join("received_files")
+    } else if cfg!(windows) {
+        #[cfg(windows)]
+        return crate::config_file::windows_portable_download_dir()
+            .unwrap_or_else(|_| app_dir.join("downloads"));
+        #[cfg(not(windows))]
+        unreachable!();
     } else {
         let home_dir = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
-        home_dir.join("Downloads").join("LANChat")
+        home_dir.join("Downloads").join("LQChat")
     }
 }
 
@@ -198,6 +237,9 @@ pub async fn init_db_with_path(app_dir: PathBuf) -> Result<Pool<Sqlite>, sqlx::E
         std::fs::create_dir_all(&app_dir).map_err(sqlx::Error::Io)?;
     }
 
+    #[cfg(windows)]
+    let db_path = app_dir.join(crate::config_file::WINDOWS_DATABASE_FILE_NAME);
+    #[cfg(not(windows))]
     let db_path = app_dir.join("lanchat.db");
     let db_url = format!("sqlite:{}", db_path.to_string_lossy());
 
@@ -342,8 +384,13 @@ pub async fn init_db_with_path(app_dir: PathBuf) -> Result<Pool<Sqlite>, sqlx::E
 
         println!("[DB] 设置默认下载路径: {}", download_dir);
 
+        #[cfg(windows)]
+        let stored_download_dir = WINDOWS_PORTABLE_DOWNLOAD_SENTINEL;
+        #[cfg(not(windows))]
+        let stored_download_dir = download_dir;
+
         sqlx::query("INSERT INTO settings (key, value) VALUES ('download_path', ?)")
-            .bind(download_dir)
+            .bind(stored_download_dir)
             .execute(&pool)
             .await?;
     }
@@ -1523,4 +1570,35 @@ pub async fn update_file_path_by_id(
         .await
         .map_err(|e| format!("更新 file_path 失败: {}", e))?;
     Ok(())
+}
+
+#[cfg(all(test, windows))]
+mod windows_portable_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn new_database_uses_lqchat_name_and_move_safe_download_marker() {
+        let directory =
+            std::env::temp_dir().join(format!("LQChat-portable-db-test-{}", uuid::Uuid::new_v4()));
+        let pool = init_db_with_path(directory.clone()).await.unwrap();
+
+        assert!(directory
+            .join(crate::config_file::WINDOWS_DATABASE_FILE_NAME)
+            .is_file());
+        let stored: String =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'download_path'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stored, WINDOWS_PORTABLE_DOWNLOAD_SENTINEL);
+        assert_eq!(
+            get_download_path(&pool).await.unwrap(),
+            crate::config_file::windows_portable_download_dir()
+                .unwrap()
+                .to_string_lossy()
+        );
+
+        pool.close().await;
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }

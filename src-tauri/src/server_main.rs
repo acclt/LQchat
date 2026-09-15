@@ -16,6 +16,9 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
+    #[cfg(windows)]
+    lanchat::config_file::prepare_windows_portable_layout().expect("无法初始化 LQChat 便携目录");
+
     let args = Args::parse();
 
     // Step 2: 若 --db-path 没传，读 config.json
