@@ -2235,7 +2235,9 @@ pub fn ensure_windows_notification_identity() -> Result<(), String> {
         .map(PathBuf::from)
         .ok_or_else(|| "LQChat 路径缺少父目录".to_string())?;
     let launch_script = working_directory.join("Start-LQChat.cmd");
-    let shortcut_icon = working_directory.join("LQChat-shortcut.ico");
+    // The versioned icon path deliberately changes for every release so Explorer cannot
+    // reuse a stale generic-icon cache entry from an earlier installation.
+    let shortcut_icon = working_directory.join("LQChat-shortcut-v7.4.ico");
     let launch_target = if launch_script.is_file() {
         &launch_script
     } else {

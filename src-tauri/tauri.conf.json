@@ -30,12 +30,7 @@
     "targets": "all",
     "resources": {
       "resources/Start-LQChat.cmd": "Start-LQChat.cmd",
-      "resources/LQChat-shortcut.ico": "LQChat-shortcut.ico"
-    },
-    "windows": {
-      "nsis": {
-        "template": "./windows/installer.nsi"
-      }
+      "resources/LQChat-shortcut-v7.4.ico": "LQChat-shortcut-v7.4.ico"
     },
     "icon": [
       "icons/32x32.png",
