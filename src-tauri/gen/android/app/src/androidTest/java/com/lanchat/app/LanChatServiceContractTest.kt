@@ -236,6 +236,53 @@ class LanChatServiceContractTest {
     }
 
     @Test
+    fun notificationRouteDisconnectAlertsOnlyOnOnlineToOfflineTransitions() {
+        val settings = JSONObject().put("push_enabled", true).put("receive_enabled", true)
+            .put("target_device_ids", org.json.JSONArray().put("pc"))
+        val peers = org.json.JSONArray()
+            .put(JSONObject().put("id", "pc").put("name", "我的电脑")
+                .put("is_offline", false).put("pushes_to_local", false))
+            .put(JSONObject().put("id", "phone").put("name", "IQOO")
+                .put("is_offline", false).put("pushes_to_local", true))
+
+        val initial = LanChatForegroundService.monitoredNotificationRoutePeers(settings, peers)
+        assertTrue(LanChatForegroundService.newlyDisconnectedNotificationRoutePeers(null, initial).isEmpty())
+
+        peers.getJSONObject(0).put("is_offline", true)
+        val pcOffline = LanChatForegroundService.monitoredNotificationRoutePeers(settings, peers)
+        assertEquals(
+            listOf("我的电脑"),
+            LanChatForegroundService.newlyDisconnectedNotificationRoutePeers(initial, pcOffline).map { it.name },
+        )
+        assertTrue(
+            LanChatForegroundService.newlyDisconnectedNotificationRoutePeers(pcOffline, pcOffline).isEmpty(),
+        )
+
+        peers.getJSONObject(0).put("is_offline", false)
+        val pcOnlineAgain = LanChatForegroundService.monitoredNotificationRoutePeers(settings, peers)
+        peers.getJSONObject(0).put("is_offline", true)
+        peers.getJSONObject(1).put("is_offline", true)
+        val bothOffline = LanChatForegroundService.monitoredNotificationRoutePeers(settings, peers)
+        assertEquals(
+            setOf("我的电脑", "IQOO"),
+            LanChatForegroundService.newlyDisconnectedNotificationRoutePeers(pcOnlineAgain, bothOffline)
+                .map { it.name }.toSet(),
+        )
+        assertNotEquals(
+            LanChatForegroundService.disconnectNotificationIdFor("pc"),
+            LanChatForegroundService.disconnectNotificationIdFor("phone"),
+        )
+        assertEquals(
+            "我的电脑设备已从局域网断开",
+            LanChatForegroundService.notificationRouteDisconnectedText("我的电脑"),
+        )
+        assertEquals(
+            "办公室设备已从局域网断开",
+            LanChatForegroundService.notificationRouteDisconnectedText("办公室设备"),
+        )
+    }
+
+    @Test
     fun foregroundServicePermissionsArePackaged() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val packageInfo = context.packageManager.getPackageInfo(
@@ -266,12 +313,23 @@ class LanChatServiceContractTest {
         assertEquals(12_000L, BackgroundRuntimeSettings.batteryAlertIntervalMs(context))
         assertEquals(4, BackgroundRuntimeSettings.batteryAlertRepeatCount(context))
         assertEquals(setOf(25, 80), BackgroundRuntimeSettings.batteryAlertLevels(context))
+        BackgroundRuntimeSettings.beginUserSession(context)
         assertTrue(BackgroundRuntimeSettings.mayRecover(context))
         BackgroundRuntimeSettings.stopCurrentSession(context)
         assertTrue(BackgroundRuntimeSettings.mayStartOnBoot(context))
         assertFalse(BackgroundRuntimeSettings.mayRecover(context))
         BackgroundRuntimeSettings.beginBootSession(context, 123L)
         assertTrue(BackgroundRuntimeSettings.mayRecover(context))
+    }
+
+    @Test
+    fun rootBackKeepsTheActivityProcessAliveOnlyForAnActiveBackgroundSession() {
+        assertTrue(MainActivity.shouldMoveTaskToBackground(JSONObject()
+            .put("keep_running", true).put("user_stopped", false)))
+        assertFalse(MainActivity.shouldMoveTaskToBackground(JSONObject()
+            .put("keep_running", false).put("user_stopped", false)))
+        assertFalse(MainActivity.shouldMoveTaskToBackground(JSONObject()
+            .put("keep_running", true).put("user_stopped", true)))
     }
 
     @Test

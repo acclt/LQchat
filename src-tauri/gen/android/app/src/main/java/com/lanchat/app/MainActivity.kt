@@ -40,6 +40,11 @@ private const val NOTIFICATION_OBJ_INTENT_KEY = "LocalNotficationObject"
 private const val ACTION_INTENT_KEY = "NotificationUserAction"
 
 class MainActivity : TauriActivity() {
+    companion object {
+        internal fun shouldMoveTaskToBackground(settings: JSONObject): Boolean =
+            settings.optBoolean("keep_running") && !settings.optBoolean("user_stopped")
+    }
+
     @Keep
     fun notificationSettings(input: String): String = NotificationSyncSettings.command(this, input)
 
@@ -130,6 +135,11 @@ class MainActivity : TauriActivity() {
             private var pending = false
 
             private fun leaveRootPage() {
+                val backgroundSettings = BackgroundRuntimeSettings.read(this@MainActivity)
+                if (shouldMoveTaskToBackground(backgroundSettings)) {
+                    applyRecentsPolicy(backgroundSettings.optBoolean("exclude_from_recents"))
+                    if (moveTaskToBack(true)) return
+                }
                 isEnabled = false
                 try {
                     onBackPressedDispatcher.onBackPressed()

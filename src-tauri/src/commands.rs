@@ -2119,12 +2119,40 @@ pub fn get_notification_permission_state() -> Result<String, String> {
     Ok("not_applicable".to_string())
 }
 
+#[cfg(windows)]
+const WINDOWS_AUTOSTART_RUN_KEY: &str = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run";
+
+#[cfg(windows)]
+fn windows_autostart_command(executable: &std::path::Path) -> String {
+    format!("\"{}\" --autostart", executable.display())
+}
+
+#[cfg(windows)]
+fn ensure_windows_autostart_command(app_name: &str) -> Result<(), String> {
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_SET_VALUE};
+    use winreg::RegKey;
+
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("无法取得 LQChat 程序路径: {error}"))?;
+    let command = windows_autostart_command(&executable);
+    RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey_with_flags(WINDOWS_AUTOSTART_RUN_KEY, KEY_SET_VALUE)
+        .and_then(|key| key.set_value(app_name, &command))
+        .map_err(|error| format!("写入 Windows 开机启动项失败: {error}"))
+}
+
 #[tauri::command]
 pub fn get_autostart_enabled(app: tauri::AppHandle) -> Result<bool, String> {
     #[cfg(windows)]
     {
         use tauri_plugin_autostart::ManagerExt;
-        return app.autolaunch().is_enabled().map_err(|e| e.to_string());
+        let enabled = app.autolaunch().is_enabled().map_err(|e| e.to_string())?;
+        if enabled {
+            // auto-launch 0.5 writes an unquoted executable path. Repair existing entries so
+            // portable builds also start correctly from directories such as "Program Files".
+            ensure_windows_autostart_command(&app.package_info().name)?;
+        }
+        return Ok(enabled);
     }
     #[cfg(not(windows))]
     {
@@ -2140,7 +2168,8 @@ pub fn set_autostart_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(),
         use tauri_plugin_autostart::ManagerExt;
         let manager = app.autolaunch();
         if enabled {
-            manager.enable().map_err(|e| e.to_string())
+            manager.enable().map_err(|e| e.to_string())?;
+            ensure_windows_autostart_command(&app.package_info().name)
         } else {
             manager.disable().map_err(|e| e.to_string())
         }
@@ -2149,6 +2178,20 @@ pub fn set_autostart_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(),
     {
         let _ = (app, enabled);
         Err("Autostart is only available on Windows".to_string())
+    }
+}
+
+#[cfg(all(test, windows))]
+mod autostart_tests {
+    use super::windows_autostart_command;
+    use std::path::Path;
+
+    #[test]
+    fn windows_autostart_quotes_portable_paths_and_starts_hidden() {
+        assert_eq!(
+            windows_autostart_command(Path::new(r"D:\Program Files\LQChat\LQChat.exe")),
+            r#""D:\Program Files\LQChat\LQChat.exe" --autostart"#,
+        );
     }
 }
 

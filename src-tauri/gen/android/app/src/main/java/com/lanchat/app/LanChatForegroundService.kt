@@ -52,6 +52,7 @@ class LanChatForegroundService : Service() {
         private const val SERVICE_NOTIFICATION_ID = 4100
         private const val ERROR_NOTIFICATION_ID = 9100
         private const val MESSAGE_NOTIFICATION_BASE = 10000
+        private const val DISCONNECT_NOTIFICATION_BASE = 18000
         private const val RUNNING_NOTIFICATION_TEXT = "通知转发与接收服务正在运行"
         private const val SHORT_WAKE_TIMEOUT_MS = 15_000L
         private const val TRANSFER_WAKE_TIMEOUT_MS = 120_000L
@@ -165,6 +166,71 @@ class LanChatForegroundService : Service() {
                 response.optBoolean("resources_released")
         }
         internal fun notificationIdFor(idSeed: Long): Int = MESSAGE_NOTIFICATION_BASE + ((idSeed.hashCode() and Int.MAX_VALUE) % 8000)
+        internal fun disconnectNotificationIdFor(peerId: String): Int =
+            DISCONNECT_NOTIFICATION_BASE + ((peerId.hashCode() and Int.MAX_VALUE) % 8000)
+        internal fun notificationRouteDisconnectedText(peerName: String): String {
+            val name = displayPeerName(peerName)
+            val label = if (name.endsWith("设备")) name else "${name}设备"
+            return "${label}已从局域网断开"
+        }
+
+        internal data class NotificationRoutePeerState(
+            val id: String,
+            val name: String,
+            val isOffline: Boolean,
+        )
+
+        internal fun monitoredNotificationRoutePeers(
+            settings: JSONObject,
+            peers: JSONArray,
+        ): Map<String, NotificationRoutePeerState> {
+            val peerById = (0 until peers.length()).mapNotNull { index ->
+                peers.optJSONObject(index)?.let { peer -> peer.optString("id") to peer }
+            }.filter { it.first.isNotBlank() }.toMap()
+            val monitored = linkedMapOf<String, NotificationRoutePeerState>()
+            if (settings.optBoolean("push_enabled")) {
+                NotificationSyncSettings.strings(settings.optJSONArray("target_device_ids"))
+                    .sorted()
+                    .forEach { id ->
+                        val peer = peerById[id]
+                        monitored[id] = NotificationRoutePeerState(
+                            id,
+                            displayPeerName(peer?.optString("name").orEmpty()),
+                            peer == null || peer.optBoolean("is_offline", true),
+                        )
+                    }
+            }
+            if (settings.optBoolean("receive_enabled")) {
+                peerById.values
+                    .filter { it.optBoolean("pushes_to_local") }
+                    .sortedBy { it.optString("id") }
+                    .forEach { peer ->
+                        val id = peer.optString("id")
+                        monitored[id] = NotificationRoutePeerState(
+                            id,
+                            displayPeerName(peer.optString("name")),
+                            peer.optBoolean("is_offline", true),
+                        )
+                    }
+            }
+            return monitored
+        }
+
+        internal fun newlyDisconnectedNotificationRoutePeers(
+            previous: Map<String, NotificationRoutePeerState>?,
+            current: Map<String, NotificationRoutePeerState>,
+        ): List<NotificationRoutePeerState> {
+            if (previous == null) return emptyList()
+            return current.values.mapNotNull { peer ->
+                val old = previous[peer.id] ?: return@mapNotNull null
+                if (!old.isOffline && peer.isOffline) {
+                    if (peer.name == "局域网设备" && old.name != "局域网设备") peer.copy(name = old.name)
+                    else peer
+                } else {
+                    null
+                }
+            }
+        }
         internal fun notificationRouteStatusText(settings: JSONObject, peers: JSONArray): String {
             val peerById = (0 until peers.length()).mapNotNull { index ->
                 peers.optJSONObject(index)?.let { peer -> peer.optString("id") to peer }
@@ -227,6 +293,7 @@ class LanChatForegroundService : Service() {
     private var startupRecoveryAttempts = 0
     private var notificationRoutePeers = JSONArray()
     private var notificationRouteSnapshotReady = false
+    private var previousNotificationRoutePeers: Map<String, NotificationRoutePeerState>? = null
     private val healthCheckRunnable = Runnable { runHealthCheck() }
     private val startupRecoveryRunnable = Runnable { verifyStartupRecovery() }
 
@@ -369,6 +436,7 @@ class LanChatForegroundService : Service() {
     private fun rejectUnexpectedStart(startId: Int, reason: String) {
         notificationSessionActive = false
         SyncedNotificationPublisher.clear()
+        previousNotificationRoutePeers = null
         invalidatePersistedSession(this)
         acceptedSessionToken = null
         jniReadyForSession = false
@@ -604,6 +672,7 @@ class LanChatForegroundService : Service() {
         }
         notificationSessionActive = false
         SyncedNotificationPublisher.clear()
+        previousNotificationRoutePeers = null
         invalidatePersistedSession(this)
         if (!exiting.compareAndSet(false, true)) return
         mainHandler.removeCallbacks(startupRecoveryRunnable)
@@ -765,12 +834,36 @@ class LanChatForegroundService : Service() {
 
     private fun renderNotificationRouteStatus() {
         if (!notificationSessionActive || !::notificationManager.isInitialized) return
+        val settings = NotificationSyncSettings.read(this)
         val text = if (notificationRouteSnapshotReady) {
-            notificationRouteStatusText(NotificationSyncSettings.read(this), notificationRoutePeers)
+            val currentPeers = monitoredNotificationRoutePeers(settings, notificationRoutePeers)
+            newlyDisconnectedNotificationRoutePeers(previousNotificationRoutePeers, currentPeers)
+                .forEach(::postNotificationRouteDisconnected)
+            previousNotificationRoutePeers = currentPeers
+            notificationRouteStatusText(settings, notificationRoutePeers)
         } else {
             RUNNING_NOTIFICATION_TEXT
         }
         updateServiceNotification(text)
+    }
+
+    private fun postNotificationRouteDisconnected(peer: NotificationRoutePeerState) {
+        val body = notificationRouteDisconnectedText(peer.name)
+        val notification = NotificationCompat.Builder(this, MESSAGE_CHANNEL)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("LQChat 设备断开")
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setContentIntent(servicePendingIntent(peer.id))
+            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .build()
+        runCatching {
+            notificationManager.notify(disconnectNotificationIdFor(peer.id), notification)
+        }.onFailure { android.util.Log.w(TAG, "设备断开提醒发送失败", it) }
     }
 
     private fun postDataNotification(type: String, payload: JSONObject) {
