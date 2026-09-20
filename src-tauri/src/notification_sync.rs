@@ -464,6 +464,44 @@ pub async fn send(mut message: Notification, settings: Settings) -> Result<(), S
     Ok(())
 }
 
+pub fn route_status_snapshot(local_id: &str, mut peers: Vec<crate::peers::Peer>) -> Value {
+    peers.sort_by(|left, right| left.id.cmp(&right.id));
+    json!({
+        "peers": peers.into_iter().map(|peer| {
+            let pushes_to_local = peer.notification_push_enabled &&
+                peer.notification_push_target_device_ids.iter().any(|id| id == local_id);
+            json!({
+                "id": peer.id,
+                "name": peer.name,
+                "is_offline": peer.is_offline,
+                "pushes_to_local": pushes_to_local,
+            })
+        }).collect::<Vec<_>>(),
+    })
+}
+
+#[cfg(target_os = "android")]
+pub async fn run_route_status_monitor(
+    pool: sqlx::Pool<sqlx::Sqlite>,
+    peers: Arc<crate::peers::PeerManager>,
+    event_bus: crate::core_events::CoreEventBus,
+    cancellation: tokio_util::sync::CancellationToken,
+) -> Result<(), String> {
+    let local_id = crate::db::get_user_id(&pool).await?;
+    let mut previous = Value::Null;
+    loop {
+        let snapshot = route_status_snapshot(&local_id, peers.get_all_peers());
+        if snapshot != previous {
+            previous = snapshot.clone();
+            event_bus.publish(CoreEvent::NotificationRouteStatus(snapshot));
+        }
+        tokio::select! {
+            _ = cancellation.cancelled() => return Ok(()),
+            _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+        }
+    }
+}
+
 #[cfg(target_os = "android")]
 pub fn dispatch(message: Notification, settings: Settings) {
     // Admission is immediate, so a burst cannot create an unbounded native task backlog.
@@ -665,6 +703,24 @@ mod tests {
         let n: Notification = serde_json::from_value(value).unwrap();
         assert!(n.app_icon.is_none());
         assert!(n.validate("pc").is_ok());
+    }
+
+    #[test]
+    fn route_status_snapshot_marks_targets_and_inbound_sources() {
+        let peers = vec![crate::peers::Peer {
+            id: "phone".into(),
+            name: "IQOO".into(),
+            addr: "192.168.1.2:8888".into(),
+            last_seen: 1,
+            is_offline: true,
+            available_memory_mb: 100,
+            notification_push_enabled: true,
+            notification_push_target_device_ids: vec!["local".into()],
+        }];
+        let snapshot = route_status_snapshot("local", peers);
+        assert_eq!(snapshot["peers"][0]["name"], "IQOO");
+        assert_eq!(snapshot["peers"][0]["is_offline"], true);
+        assert_eq!(snapshot["peers"][0]["pushes_to_local"], true);
     }
     #[cfg(windows)]
     #[test]

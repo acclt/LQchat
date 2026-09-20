@@ -203,6 +203,39 @@ class LanChatServiceContractTest {
     }
 
     @Test
+    fun foregroundNotificationTracksSettingsAndPeerConnectivity() {
+        val onlinePeers = org.json.JSONArray()
+            .put(JSONObject().put("id", "pc").put("name", "我的电脑")
+                .put("is_offline", false).put("pushes_to_local", false))
+            .put(JSONObject().put("id", "phone").put("name", "IQOO")
+                .put("is_offline", false).put("pushes_to_local", true))
+        val bothDirections = JSONObject().put("push_enabled", true).put("receive_enabled", true)
+            .put("target_device_ids", org.json.JSONArray().put("pc"))
+        assertEquals(
+            "正在转发通知给 我的电脑；正在接收来自IQOO的通知",
+            LanChatForegroundService.notificationRouteStatusText(bothDirections, onlinePeers),
+        )
+
+        onlinePeers.getJSONObject(0).put("is_offline", true)
+        assertEquals(
+            "局域网设备已断开",
+            LanChatForegroundService.notificationRouteStatusText(bothDirections, onlinePeers),
+        )
+
+        val receiveOnly = JSONObject().put("receive_enabled", true)
+            .put("target_device_ids", org.json.JSONArray())
+        assertEquals(
+            "正在接收来自IQOO的通知",
+            LanChatForegroundService.notificationRouteStatusText(receiveOnly, onlinePeers),
+        )
+        onlinePeers.getJSONObject(1).put("is_offline", true)
+        assertEquals(
+            "局域网设备已断开",
+            LanChatForegroundService.notificationRouteStatusText(receiveOnly, onlinePeers),
+        )
+    }
+
+    @Test
     fun foregroundServicePermissionsArePackaged() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val packageInfo = context.packageManager.getPackageInfo(

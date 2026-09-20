@@ -40,6 +40,7 @@ pub enum CoreEvent {
     CoreStateChanged(CoreStatus),
     PeerDiscovered(serde_json::Value),
     MessageReceived(serde_json::Value),
+    NotificationRouteStatus(serde_json::Value),
     NotificationReceived(serde_json::Value),
     NotificationRecordsChanged,
     FileOfferReceived(serde_json::Value),
@@ -53,7 +54,7 @@ pub enum CoreEvent {
 impl CoreEvent {
     pub fn ui_event(&self) -> Option<(&'static str, serde_json::Value)> {
         match self {
-            Self::NotificationReceived(_) => None,
+            Self::NotificationRouteStatus(_) | Self::NotificationReceived(_) => None,
             Self::NotificationRecordsChanged => {
                 Some(("notification-records-changed", serde_json::Value::Null))
             }
@@ -163,5 +164,21 @@ mod tests {
         }));
         let event = receiver.recv().await.unwrap();
         assert!(matches!(event, CoreEvent::FileTransferCompleted(_)));
+    }
+
+    #[test]
+    fn notification_route_status_is_service_only() {
+        let event = CoreEvent::NotificationRouteStatus(serde_json::json!({
+            "peers": [{
+                "id": "desktop",
+                "name": "我的电脑",
+                "is_offline": false,
+                "pushes_to_local": false
+            }],
+        }));
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["type"], "notification_route_status");
+        assert_eq!(value["payload"]["peers"][0]["name"], "我的电脑");
+        assert!(event.ui_event().is_none());
     }
 }

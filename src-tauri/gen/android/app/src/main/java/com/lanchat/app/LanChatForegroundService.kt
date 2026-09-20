@@ -27,6 +27,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
+import org.json.JSONArray
 import org.json.JSONObject
 
 class LanChatForegroundService : Service() {
@@ -51,6 +52,7 @@ class LanChatForegroundService : Service() {
         private const val SERVICE_NOTIFICATION_ID = 4100
         private const val ERROR_NOTIFICATION_ID = 9100
         private const val MESSAGE_NOTIFICATION_BASE = 10000
+        private const val RUNNING_NOTIFICATION_TEXT = "通知转发与接收服务正在运行"
         private const val SHORT_WAKE_TIMEOUT_MS = 15_000L
         private const val TRANSFER_WAKE_TIMEOUT_MS = 120_000L
         private const val STOP_CALL_TIMEOUT_MS = 15_000L
@@ -121,6 +123,11 @@ class LanChatForegroundService : Service() {
             }
         }
 
+        fun refreshNotificationRouteStatus() {
+            val service = activeInstance ?: return
+            service.mainHandler.post { service.renderNotificationRouteStatus() }
+        }
+
         internal fun persistSession(context: Context, token: String): Boolean =
             context.getSharedPreferences(SESSION_PREFS, Context.MODE_PRIVATE).edit()
                 .putBoolean(SESSION_ACTIVE, true).putString(SESSION_TOKEN, token).commit()
@@ -158,6 +165,40 @@ class LanChatForegroundService : Service() {
                 response.optBoolean("resources_released")
         }
         internal fun notificationIdFor(idSeed: Long): Int = MESSAGE_NOTIFICATION_BASE + ((idSeed.hashCode() and Int.MAX_VALUE) % 8000)
+        internal fun notificationRouteStatusText(settings: JSONObject, peers: JSONArray): String {
+            val peerById = (0 until peers.length()).mapNotNull { index ->
+                peers.optJSONObject(index)?.let { peer -> peer.optString("id") to peer }
+            }.filter { it.first.isNotBlank() }.toMap()
+            val targetIds = NotificationSyncSettings.strings(settings.optJSONArray("target_device_ids")).sorted()
+            val targets = targetIds.map { id -> peerById[id] }
+            val sources = (0 until peers.length()).mapNotNull { index -> peers.optJSONObject(index) }
+                .filter { it.optBoolean("pushes_to_local") }
+            val pushEnabled = settings.optBoolean("push_enabled")
+            val receiveEnabled = settings.optBoolean("receive_enabled")
+            val disconnected =
+                (pushEnabled && targets.any { it == null || it.optBoolean("is_offline", true) }) ||
+                    (receiveEnabled && sources.any { it.optBoolean("is_offline", true) })
+            if (disconnected) return "局域网设备已断开"
+
+            val states = mutableListOf<String>()
+            if (pushEnabled) {
+                states += if (targets.isEmpty()) {
+                    "正在等待选择通知转发设备"
+                } else {
+                    "正在转发通知给 ${targets.joinToString("、") { displayPeerName(it?.optString("name").orEmpty()) }}"
+                }
+            }
+            if (receiveEnabled) {
+                states += if (sources.isEmpty()) {
+                    "正在接收通知"
+                } else {
+                    "正在接收来自${sources.joinToString("、") { displayPeerName(it.optString("name")) }}的通知"
+                }
+            }
+            return states.joinToString("；").ifBlank { RUNNING_NOTIFICATION_TEXT }
+        }
+        private fun displayPeerName(peerName: String): String =
+            peerName.trim().takeIf { it.isNotEmpty() } ?: "局域网设备"
     }
 
     init { System.loadLibrary("lanchat") }
@@ -184,6 +225,8 @@ class LanChatForegroundService : Service() {
     private var selfHealRestartInFlight = false
     private var foregroundEstablished = false
     private var startupRecoveryAttempts = 0
+    private var notificationRoutePeers = JSONArray()
+    private var notificationRouteSnapshotReady = false
     private val healthCheckRunnable = Runnable { runHealthCheck() }
     private val startupRecoveryRunnable = Runnable { verifyStartupRecovery() }
 
@@ -350,6 +393,8 @@ class LanChatForegroundService : Service() {
         if (!force && !coreStartRequested.compareAndSet(false, true)) return false
         if (force) coreStartRequested.set(true)
         if (selfHealing) selfHealRestartInFlight = true
+        notificationRoutePeers = JSONArray()
+        notificationRouteSnapshotReady = false
         updateServiceNotification("正在启动后台接收服务")
         val submitted = runCatching {
             worker.execute {
@@ -481,7 +526,7 @@ class LanChatForegroundService : Service() {
                 resetSelfHealingState()
                 ServiceRecoveryDiagnostics.record(this, "core_running")
                 notificationManager.cancel(ERROR_NOTIFICATION_ID)
-                updateServiceNotification("已准备好发送和接收消息与文件")
+                renderNotificationRouteStatus()
                 updateMulticastLock()
             }
             "STARTING" -> updateServiceNotification("正在启动后台接收服务")
@@ -512,6 +557,11 @@ class LanChatForegroundService : Service() {
                 val type = event.getString("type")
                 val payload = event.optJSONObject("payload") ?: JSONObject()
                 when (type) {
+                    "notification_route_status" -> {
+                        notificationRoutePeers = payload.optJSONArray("peers") ?: JSONArray()
+                        notificationRouteSnapshotReady = true
+                        renderNotificationRouteStatus()
+                    }
                     "notification_received" -> SyncedNotificationPublisher.receive(this, payload)
                     "core_state_changed", "core_error" -> applyCoreResult(
                         JSONObject().put("ok", type != "core_error").put("status", payload)
@@ -711,6 +761,16 @@ class LanChatForegroundService : Service() {
 
     private fun updateServiceNotification(text: String) {
         notificationManager.notify(SERVICE_NOTIFICATION_ID, buildServiceNotification(text))
+    }
+
+    private fun renderNotificationRouteStatus() {
+        if (!notificationSessionActive || !::notificationManager.isInitialized) return
+        val text = if (notificationRouteSnapshotReady) {
+            notificationRouteStatusText(NotificationSyncSettings.read(this), notificationRoutePeers)
+        } else {
+            RUNNING_NOTIFICATION_TEXT
+        }
+        updateServiceNotification(text)
     }
 
     private fun postDataNotification(type: String, payload: JSONObject) {

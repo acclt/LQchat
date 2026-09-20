@@ -66,6 +66,7 @@ object NotificationSyncSettings {
                         .putStringSet("target_device_ids", strings(previous.optJSONArray("target_device_ids"))).commit()
                     error("设置保存失败，已保留旧值")
                 }
+                LanChatForegroundService.refreshNotificationRouteStatus()
             }
             "apps" -> {
                 val selected = read(context).getJSONArray("allowed_packages")

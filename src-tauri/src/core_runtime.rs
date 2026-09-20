@@ -344,6 +344,13 @@ impl CoreRuntime {
                 supervisor_pool.clone(),
                 supervisor_cancellation.child_token(),
             ));
+            #[cfg(target_os = "android")]
+            tasks.spawn(crate::notification_sync::run_route_status_monitor(
+                supervisor_pool.clone(),
+                supervisor_peer_manager.clone(),
+                event_bus.clone(),
+                supervisor_cancellation.child_token(),
+            ));
             tasks.spawn(crate::network::discovery::run_listener(
                 udp_listener,
                 port,
