@@ -351,6 +351,10 @@ impl CoreRuntime {
                 event_bus.clone(),
                 supervisor_cancellation.child_token(),
             ));
+            tasks.spawn(crate::peers::run_presence_monitor(
+                supervisor_peer_manager.clone(),
+                supervisor_cancellation.child_token(),
+            ));
             tasks.spawn(crate::network::discovery::run_listener(
                 udp_listener,
                 port,

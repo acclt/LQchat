@@ -12,6 +12,7 @@ use crate::peers::{Peer, PeerManager};
 
 const COALESCE: Duration = Duration::from_secs(1);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
+const PRESENCE_GRACE: Duration = Duration::from_secs(12);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Profile {
@@ -122,7 +123,7 @@ impl PeerPersistence {
             .unwrap()
             .seen
             .get(id)
-            .is_none_or(|seen| seen.elapsed().as_secs() > 5)
+            .is_none_or(|seen| seen.elapsed() >= PRESENCE_GRACE)
     }
 
     pub fn status(&self) -> PersistenceStatus {
@@ -380,14 +381,23 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(after, historical);
-        // Offline expiry is a monotonic in-memory clock, independent of DB time.
+        // A short heartbeat gap is below the Windows grace period and reads do
+        // not mutate presence; the shared monitor performs active confirmation.
         f.store
             .state
             .lock()
             .unwrap()
             .seen
             .insert("peer".into(), Instant::now() - Duration::from_secs(6));
-        assert!(f.manager.get_active_peers().is_empty());
+        assert!(!f.store.is_stale("peer"));
+        assert_eq!(f.manager.get_active_peers().len(), 1);
+        f.store
+            .state
+            .lock()
+            .unwrap()
+            .seen
+            .insert("peer".into(), Instant::now() - Duration::from_secs(13));
+        assert!(f.store.is_stale("peer"));
     }
 
     #[tokio::test]

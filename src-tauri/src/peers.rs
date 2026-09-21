@@ -2,7 +2,20 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio_util::sync::CancellationToken;
+
+const PRESENCE_GRACE: Duration = Duration::from_secs(12);
+const PRESENCE_PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
+
+#[derive(Clone)]
+struct StaleCandidate {
+    id: String,
+    name: String,
+    addr: String,
+    last_seen: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Peer {
@@ -169,55 +182,68 @@ impl PeerManager {
         }
     }
 
-    // 标记所有用户为"待确认"状态,然后检查哪些用户离线
-    pub fn mark_stale_as_offline(&self) {
+    fn stale_candidates(&self) -> Vec<StaleCandidate> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
+        self.peers
+            .read()
+            .unwrap()
+            .values()
+            .filter(|peer| {
+                !peer.is_offline
+                    && !peer.addr.is_empty()
+                    && now.saturating_sub(peer.last_seen) >= PRESENCE_GRACE.as_secs()
+            })
+            .map(|peer| StaleCandidate {
+                id: peer.id.clone(),
+                name: peer.name.clone(),
+                addr: peer.addr.clone(),
+                last_seen: peer.last_seen,
+            })
+            .collect()
+    }
 
+    fn complete_presence_probe(&self, candidate: &StaleCandidate, reachable: bool) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         let mut peers = self.peers.write().unwrap();
-
-        // 标记超过 5 秒未见的用户为离线
-        for peer in peers.values_mut() {
-            #[cfg(not(windows))]
-            let time_since_seen = now - peer.last_seen;
-            #[cfg(windows)]
-            let time_since_seen = if self.persistence().is_some() {
+        let Some(peer) = peers.get_mut(&candidate.id) else {
+            return;
+        };
+        // A discovery packet arrived while the probe was running. Its newer
+        // observation wins over this result.
+        if peer.is_offline || peer.last_seen != candidate.last_seen {
+            return;
+        }
+        if reachable {
+            // A TCP handshake to the peer's LQChat port proves that the app is
+            // still alive even if a few best-effort UDP broadcasts were lost.
+            peer.last_seen = now;
+            return;
+        }
+        if now.saturating_sub(peer.last_seen) >= PRESENCE_GRACE.as_secs() {
+            println!(
+                "[PeerManager] 用户离线: {} ({}) - {}秒未见且主动探测失败",
+                candidate.name,
+                candidate.id,
                 now.saturating_sub(peer.last_seen)
-            } else {
-                now - peer.last_seen
-            };
-            let stale = time_since_seen > 5;
-            #[cfg(windows)]
-            let stale = self
-                .persistence()
-                .map_or(stale, |store| store.is_stale(&peer.id));
-            if stale && !peer.is_offline {
-                println!(
-                    "[PeerManager] 用户离线: {} ({}) - {}秒未见",
-                    peer.name, peer.id, time_since_seen
-                );
-                peer.is_offline = true;
-            }
+            );
+            peer.is_offline = true;
         }
     }
 
     // 获取所有用户（包括离线的）
     pub fn get_all_peers(&self) -> Vec<Peer> {
-        // 先标记离线用户
-        self.mark_stale_as_offline();
-
         let peers = self.peers.read().unwrap();
         peers.values().cloned().collect()
     }
 
     // 获取所有在线用户（过滤掉离线的）
     pub fn get_active_peers(&self) -> Vec<Peer> {
-        #[cfg(windows)]
-        if self.persistence().is_some() {
-            self.mark_stale_as_offline();
-        }
         let peers = self.peers.read().unwrap();
         peers.values().filter(|p| !p.is_offline).cloned().collect()
     }
@@ -297,8 +323,94 @@ impl PeerManager {
     }
 }
 
+pub async fn run_presence_monitor(
+    manager: Arc<PeerManager>,
+    cancellation: CancellationToken,
+) -> Result<(), String> {
+    use futures_util::{stream::FuturesUnordered, StreamExt};
+
+    let mut interval = tokio::time::interval(Duration::from_secs(2));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            _ = cancellation.cancelled() => return Ok(()),
+            _ = interval.tick() => {}
+        }
+
+        let mut probes = FuturesUnordered::new();
+        for candidate in manager.stale_candidates() {
+            probes.push(async move {
+                let reachable = matches!(
+                    tokio::time::timeout(
+                        PRESENCE_PROBE_TIMEOUT,
+                        tokio::net::TcpStream::connect(&candidate.addr),
+                    )
+                    .await,
+                    Ok(Ok(_))
+                );
+                (candidate, reachable)
+            });
+        }
+        while let Some((candidate, reachable)) = probes.next().await {
+            manager.complete_presence_probe(&candidate, reachable);
+        }
+    }
+}
+
 impl Default for PeerManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod presence_tests {
+    use super::*;
+
+    fn stale_manager() -> PeerManager {
+        let manager = PeerManager::new();
+        manager.observe_discovery("peer".into(), "对端".into(), "127.0.0.1:8888".into(), 128);
+        manager
+            .peers
+            .write()
+            .unwrap()
+            .get_mut("peer")
+            .unwrap()
+            .last_seen = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - 20;
+        manager
+    }
+
+    #[test]
+    fn reachable_stale_peer_stays_online() {
+        let manager = stale_manager();
+        let candidate = manager.stale_candidates().pop().unwrap();
+        assert_eq!(candidate.addr, "127.0.0.1:8888");
+        manager.complete_presence_probe(&candidate, true);
+        let peer = manager.peers.read().unwrap().get("peer").unwrap().clone();
+        assert!(!peer.is_offline);
+        assert!(peer.last_seen > candidate.last_seen);
+    }
+
+    #[test]
+    fn unreachable_stale_peer_is_confirmed_offline() {
+        let manager = stale_manager();
+        let candidate = manager.stale_candidates().pop().unwrap();
+        manager.complete_presence_probe(&candidate, false);
+        assert!(manager.peers.read().unwrap()["peer"].is_offline);
+    }
+
+    #[test]
+    fn newer_discovery_wins_over_failed_probe() {
+        let manager = stale_manager();
+        let candidate = manager.stale_candidates().pop().unwrap();
+        manager.observe_discovery("peer".into(), "对端".into(), "127.0.0.1:8888".into(), 256);
+        manager.complete_presence_probe(&candidate, false);
+        let peer = manager.peers.read().unwrap().get("peer").unwrap().clone();
+        assert!(!peer.is_offline);
+        assert_eq!(peer.available_memory_mb, 256);
     }
 }
