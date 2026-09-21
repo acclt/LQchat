@@ -236,7 +236,7 @@ class LanChatServiceContractTest {
     }
 
     @Test
-    fun notificationRouteDisconnectAlertsOnlyOnOnlineToOfflineTransitions() {
+    fun notificationRouteAlertsOnlyOnConnectionStateTransitions() {
         val settings = JSONObject().put("push_enabled", true).put("receive_enabled", true)
             .put("target_device_ids", org.json.JSONArray().put("pc"))
         val peers = org.json.JSONArray()
@@ -247,6 +247,14 @@ class LanChatServiceContractTest {
 
         val initial = LanChatForegroundService.monitoredNotificationRoutePeers(settings, peers)
         assertTrue(LanChatForegroundService.newlyDisconnectedNotificationRoutePeers(null, initial).isEmpty())
+        assertEquals(
+            setOf("我的电脑", "IQOO"),
+            LanChatForegroundService.newlyConnectedNotificationRoutePeers(null, initial)
+                .map { it.name }.toSet(),
+        )
+        assertTrue(
+            LanChatForegroundService.newlyConnectedNotificationRoutePeers(initial, initial).isEmpty(),
+        )
 
         peers.getJSONObject(0).put("is_offline", true)
         val pcOffline = LanChatForegroundService.monitoredNotificationRoutePeers(settings, peers)
@@ -260,6 +268,11 @@ class LanChatServiceContractTest {
 
         peers.getJSONObject(0).put("is_offline", false)
         val pcOnlineAgain = LanChatForegroundService.monitoredNotificationRoutePeers(settings, peers)
+        assertEquals(
+            listOf("我的电脑"),
+            LanChatForegroundService.newlyConnectedNotificationRoutePeers(pcOffline, pcOnlineAgain)
+                .map { it.name },
+        )
         peers.getJSONObject(0).put("is_offline", true)
         peers.getJSONObject(1).put("is_offline", true)
         val bothOffline = LanChatForegroundService.monitoredNotificationRoutePeers(settings, peers)
@@ -279,6 +292,14 @@ class LanChatServiceContractTest {
         assertEquals(
             "办公室设备已从局域网断开",
             LanChatForegroundService.notificationRouteDisconnectedText("办公室设备"),
+        )
+        assertEquals(
+            "我的电脑已接入局域网",
+            LanChatForegroundService.notificationRouteConnectedText("我的电脑"),
+        )
+        assertEquals(
+            "办公室设备已接入局域网",
+            LanChatForegroundService.notificationRouteConnectedText("办公室设备"),
         )
     }
 
