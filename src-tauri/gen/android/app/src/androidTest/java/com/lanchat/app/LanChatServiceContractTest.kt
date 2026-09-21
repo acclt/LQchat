@@ -247,14 +247,48 @@ class LanChatServiceContractTest {
 
         val initial = LanChatForegroundService.monitoredNotificationRoutePeers(settings, peers)
         assertTrue(LanChatForegroundService.newlyDisconnectedNotificationRoutePeers(null, initial).isEmpty())
-        assertEquals(
-            setOf("我的电脑", "IQOO"),
-            LanChatForegroundService.newlyConnectedNotificationRoutePeers(null, initial)
-                .map { it.name }.toSet(),
-        )
+        assertTrue(LanChatForegroundService.newlyConnectedNotificationRoutePeers(null, initial).isEmpty())
         assertTrue(
             LanChatForegroundService.newlyConnectedNotificationRoutePeers(initial, initial).isEmpty(),
         )
+
+        val initialized = LanChatForegroundService.mergeNotificationRoutePeerStates(
+            null,
+            initial,
+            initializeUnknown = true,
+        )
+        val temporarilyMissing = LanChatForegroundService.mergeNotificationRoutePeerStates(
+            initialized,
+            initial - "phone",
+            initializeUnknown = false,
+        )
+        assertEquals(initialized["phone"], temporarilyMissing["phone"])
+        assertTrue(
+            LanChatForegroundService.newlyConnectedNotificationRoutePeers(temporarilyMissing, initial).isEmpty(),
+        )
+        val restored = LanChatForegroundService.notificationRoutePeerStatesFromJson(
+            LanChatForegroundService.notificationRoutePeerStatesToJson(initial),
+        )
+        assertEquals(initial, restored)
+        val rememberedOffline = initialized + (
+            "pc" to initialized.getValue("pc").copy(isOffline = true)
+        )
+        assertTrue(
+            LanChatForegroundService.mergeNotificationRoutePeerStates(
+                rememberedOffline,
+                initial,
+                initializeUnknown = true,
+            ).getValue("pc").isOffline,
+        )
+        assertTrue(
+            LanChatForegroundService.mergeNotificationRoutePeerStates(
+                rememberedOffline,
+                initial,
+                initializeUnknown = false,
+            ).getValue("pc").isOffline,
+        )
+        assertEquals(null, LanChatForegroundService.notificationRoutePeerStatesFromJson(null))
+        assertEquals(null, LanChatForegroundService.notificationRoutePeerStatesFromJson("bad-json"))
 
         peers.getJSONObject(0).put("is_offline", true)
         val pcOffline = LanChatForegroundService.monitoredNotificationRoutePeers(settings, peers)
@@ -300,6 +334,38 @@ class LanChatServiceContractTest {
         assertEquals(
             "办公室设备已接入局域网",
             LanChatForegroundService.notificationRouteConnectedText("办公室设备"),
+        )
+        assertTrue(
+            LanChatForegroundService.isNotificationRouteConnectionRelevant(
+                settings,
+                JSONObject().put("id", "pc").put("pushes_to_local", false),
+            ),
+        )
+        assertTrue(
+            LanChatForegroundService.isNotificationRouteConnectionRelevant(
+                settings,
+                JSONObject().put("id", "phone").put("pushes_to_local", true),
+            ),
+        )
+        assertFalse(
+            LanChatForegroundService.isNotificationRouteConnectionRelevant(
+                settings,
+                JSONObject().put("id", "other").put("pushes_to_local", false),
+            ),
+        )
+        val newPc = JSONObject().put("id", "pc").put("connection_transition", "new")
+        val heartbeatPc = JSONObject().put("id", "pc").put("connection_transition", "unchanged")
+        assertTrue(LanChatForegroundService.shouldNotifyNotificationRouteConnection(null, settings, newPc))
+        assertFalse(LanChatForegroundService.shouldNotifyNotificationRouteConnection(null, settings, heartbeatPc))
+        assertFalse(
+            LanChatForegroundService.shouldNotifyNotificationRouteConnection(initial, settings, newPc),
+        )
+        assertTrue(
+            LanChatForegroundService.shouldNotifyNotificationRouteConnection(
+                rememberedOffline,
+                settings,
+                heartbeatPc,
+            ),
         )
     }
 

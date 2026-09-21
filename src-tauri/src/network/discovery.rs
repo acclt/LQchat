@@ -212,7 +212,7 @@ pub async fn run_listener(
         let available_memory_mb = parts[5].parse().unwrap_or(0);
         let peer_addr = format!("{}:{peer_port}", address.ip());
         let notification_presence = parse_notification_presence(&parts);
-        let Some(is_new_or_reconnected) = peer_manager.observe_discovery(
+        let Some(connection_transition) = peer_manager.observe_discovery(
             peer_id.clone(),
             name.clone(),
             peer_addr.clone(),
@@ -245,7 +245,7 @@ pub async fn run_listener(
             .map_err(|error| format!("保存发现设备失败: {error}"))?;
         }
 
-        if is_new_or_reconnected {
+        if connection_transition.is_connected() {
             let resend_pool = pool.clone();
             let resend_peer_id = peer_id.clone();
             let resend_peer_addr = peer_addr.clone();
@@ -273,6 +273,10 @@ pub async fn run_listener(
             "name": name,
             "addr": peer_addr,
             "available_memory_mb": available_memory_mb,
+            "connection_transition": connection_transition.as_str(),
+            "pushes_to_local": notification_presence.as_ref().is_some_and(|(enabled, targets)| {
+                *enabled && targets.iter().any(|target| target == &my_id)
+            }),
         });
         if let Some((enabled, targets)) = notification_presence {
             event["notification_push_enabled"] = serde_json::json!(enabled);

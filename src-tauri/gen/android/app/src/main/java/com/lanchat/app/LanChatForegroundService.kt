@@ -42,6 +42,8 @@ class LanChatForegroundService : Service() {
         private const val SESSION_PREFS = "lanchat_runtime_session"
         private const val SESSION_ACTIVE = "active"
         private const val SESSION_TOKEN = "token"
+        private const val ROUTE_STATE_PREFS = "lanchat_notification_route_state"
+        private const val ROUTE_STATE_SNAPSHOT = "peers"
         @Volatile private var nativeReadyInProcess = false
         @Volatile private var notificationSessionActive = false
         @Volatile private var activeInstance: LanChatForegroundService? = null
@@ -238,18 +240,96 @@ class LanChatForegroundService : Service() {
         internal fun newlyConnectedNotificationRoutePeers(
             previous: Map<String, NotificationRoutePeerState>?,
             current: Map<String, NotificationRoutePeerState>,
-        ): List<NotificationRoutePeerState> = current.values.mapNotNull { peer ->
-            if (peer.isOffline) return@mapNotNull null
-            val old = previous?.get(peer.id)
-            if (old == null || old.isOffline) {
-                if (peer.name == "局域网设备" && old?.name != null && old.name != "局域网设备") {
-                    peer.copy(name = old.name)
+        ): List<NotificationRoutePeerState> {
+            if (previous == null) return emptyList()
+            return current.values.mapNotNull { peer ->
+                if (peer.isOffline) return@mapNotNull null
+                val old = previous[peer.id] ?: return@mapNotNull null
+                if (old.isOffline) {
+                    if (peer.name == "局域网设备" && old.name != "局域网设备") {
+                        peer.copy(name = old.name)
+                    } else {
+                        peer
+                    }
                 } else {
-                    peer
+                    null
                 }
-            } else {
-                null
             }
+        }
+
+        internal fun mergeNotificationRoutePeerStates(
+            previous: Map<String, NotificationRoutePeerState>?,
+            current: Map<String, NotificationRoutePeerState>,
+            initializeUnknown: Boolean,
+        ): Map<String, NotificationRoutePeerState> {
+            // Missing snapshots are unknown, not disconnected. Likewise, an
+            // offline -> online snapshot waits for a fresh discovery event so
+            // a service/core rebuild cannot manufacture a connection alert.
+            val merged = previous.orEmpty().toMutableMap()
+            current.values.forEach { peer ->
+                val old = merged[peer.id]
+                when {
+                    initializeUnknown && old == null -> merged[peer.id] = peer
+                    initializeUnknown -> merged[peer.id] = old!!.copy(name = peer.name)
+                    old == null && peer.isOffline -> merged[peer.id] = peer
+                    old == null -> Unit
+                    !old.isOffline && peer.isOffline -> merged[peer.id] = peer
+                    old.isOffline && !peer.isOffline -> Unit
+                    else -> merged[peer.id] = peer
+                }
+            }
+            return merged
+        }
+
+        internal fun isNotificationRouteConnectionRelevant(
+            settings: JSONObject,
+            payload: JSONObject,
+        ): Boolean {
+            val peerId = payload.optString("id")
+            if (peerId.isBlank()) return false
+            val isPushTarget = settings.optBoolean("push_enabled") &&
+                peerId in NotificationSyncSettings.strings(settings.optJSONArray("target_device_ids"))
+            val isReceiveSource = settings.optBoolean("receive_enabled") &&
+                payload.optBoolean("pushes_to_local")
+            return isPushTarget || isReceiveSource
+        }
+
+        internal fun shouldNotifyNotificationRouteConnection(
+            previous: Map<String, NotificationRoutePeerState>?,
+            settings: JSONObject,
+            payload: JSONObject,
+        ): Boolean {
+            val transition = payload.optString("connection_transition")
+            if (transition != "new" && transition != "reconnected" && transition != "unchanged") return false
+            if (!isNotificationRouteConnectionRelevant(settings, payload)) return false
+            val id = payload.optString("id").takeIf { it.isNotBlank() } ?: return false
+            val old = previous?.get(id)
+            if (old?.isOffline == false) return false
+            return transition != "unchanged" || old?.isOffline == true
+        }
+
+        internal fun notificationRoutePeerStatesToJson(
+            states: Map<String, NotificationRoutePeerState>,
+        ): String = JSONArray(states.values.sortedBy { it.id }.map { peer ->
+            JSONObject().put("id", peer.id).put("name", peer.name).put("is_offline", peer.isOffline)
+        }).toString()
+
+        internal fun notificationRoutePeerStatesFromJson(
+            raw: String?,
+        ): Map<String, NotificationRoutePeerState>? {
+            if (raw == null) return null
+            return runCatching {
+                val peers = JSONArray(raw)
+                (0 until peers.length()).mapNotNull { index ->
+                    val peer = peers.optJSONObject(index) ?: return@mapNotNull null
+                    val id = peer.optString("id").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    id to NotificationRoutePeerState(
+                        id,
+                        displayPeerName(peer.optString("name")),
+                        peer.optBoolean("is_offline", true),
+                    )
+                }.toMap()
+            }.getOrNull()
         }
         internal fun notificationRouteStatusText(settings: JSONObject, peers: JSONArray): String {
             val peerById = (0 until peers.length()).mapNotNull { index ->
@@ -314,6 +394,7 @@ class LanChatForegroundService : Service() {
     private var notificationRoutePeers = JSONArray()
     private var notificationRouteSnapshotReady = false
     private var previousNotificationRoutePeers: Map<String, NotificationRoutePeerState>? = null
+    private var notificationRouteStateInitialized = false
     private val healthCheckRunnable = Runnable { runHealthCheck() }
     private val startupRecoveryRunnable = Runnable { verifyStartupRecovery() }
 
@@ -336,6 +417,7 @@ class LanChatForegroundService : Service() {
         powerManager = getSystemService(PowerManager::class.java)
         createNotificationChannels()
         activeInstance = this
+        previousNotificationRoutePeers = loadNotificationRoutePeerStates()
         batteryAlertController = BatteryAlertController(
             applicationContext,
             notificationManager,
@@ -650,6 +732,7 @@ class LanChatForegroundService : Service() {
                         notificationRouteSnapshotReady = true
                         renderNotificationRouteStatus()
                     }
+                    "peer_discovered" -> handleNotificationRouteConnection(payload)
                     "notification_received" -> SyncedNotificationPublisher.receive(this, payload)
                     "core_state_changed", "core_error" -> applyCoreResult(
                         JSONObject().put("ok", type != "core_error").put("status", payload)
@@ -857,16 +940,47 @@ class LanChatForegroundService : Service() {
         val settings = NotificationSyncSettings.read(this)
         val text = if (notificationRouteSnapshotReady) {
             val currentPeers = monitoredNotificationRoutePeers(settings, notificationRoutePeers)
-            newlyDisconnectedNotificationRoutePeers(previousNotificationRoutePeers, currentPeers)
-                .forEach(::postNotificationRouteDisconnected)
-            newlyConnectedNotificationRoutePeers(previousNotificationRoutePeers, currentPeers)
-                .forEach(::postNotificationRouteConnected)
-            previousNotificationRoutePeers = currentPeers
+            if (notificationRouteStateInitialized) {
+                newlyDisconnectedNotificationRoutePeers(previousNotificationRoutePeers, currentPeers)
+                    .forEach(::postNotificationRouteDisconnected)
+            }
+            previousNotificationRoutePeers = mergeNotificationRoutePeerStates(
+                previousNotificationRoutePeers,
+                currentPeers,
+                initializeUnknown = !notificationRouteStateInitialized,
+            )
+            notificationRouteStateInitialized = true
+            persistNotificationRoutePeerStates()
             notificationRouteStatusText(settings, notificationRoutePeers)
         } else {
             RUNNING_NOTIFICATION_TEXT
         }
         updateServiceNotification(text)
+    }
+
+    private fun handleNotificationRouteConnection(payload: JSONObject) {
+        val settings = NotificationSyncSettings.read(this)
+        if (!shouldNotifyNotificationRouteConnection(previousNotificationRoutePeers, settings, payload)) return
+        val transition = payload.optString("connection_transition")
+        val id = payload.optString("id").takeIf { it.isNotBlank() } ?: return
+        val peer = NotificationRoutePeerState(id, displayPeerName(payload.optString("name")), false)
+        postNotificationRouteConnected(peer)
+        previousNotificationRoutePeers = previousNotificationRoutePeers.orEmpty() + (id to peer)
+        persistNotificationRoutePeerStates()
+        android.util.Log.i(TAG, "通知转发设备接入：${peer.name} (${peer.id})，原因=$transition")
+    }
+
+    private fun loadNotificationRoutePeerStates(): Map<String, NotificationRoutePeerState>? =
+        notificationRoutePeerStatesFromJson(
+            getSharedPreferences(ROUTE_STATE_PREFS, Context.MODE_PRIVATE)
+                .getString(ROUTE_STATE_SNAPSHOT, null),
+        )
+
+    private fun persistNotificationRoutePeerStates() {
+        val states = previousNotificationRoutePeers ?: return
+        getSharedPreferences(ROUTE_STATE_PREFS, Context.MODE_PRIVATE).edit()
+            .putString(ROUTE_STATE_SNAPSHOT, notificationRoutePeerStatesToJson(states))
+            .apply()
     }
 
     private fun postNotificationRouteDisconnected(peer: NotificationRoutePeerState) {

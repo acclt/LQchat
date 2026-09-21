@@ -17,6 +17,27 @@ struct StaleCandidate {
     last_seen: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerConnectionTransition {
+    Unchanged,
+    New,
+    Reconnected,
+}
+
+impl PeerConnectionTransition {
+    pub fn is_connected(self) -> bool {
+        matches!(self, Self::New | Self::Reconnected)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unchanged => "unchanged",
+            Self::New => "new",
+            Self::Reconnected => "reconnected",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Peer {
     pub id: String, // UUID
@@ -94,7 +115,7 @@ impl PeerManager {
         available_memory_mb: u64,
     ) -> bool {
         self.observe_discovery(id, name, addr, available_memory_mb)
-            .unwrap_or(false)
+            .is_some_and(PeerConnectionTransition::is_connected)
     }
 
     pub fn observe_discovery(
@@ -103,7 +124,7 @@ impl PeerManager {
         name: String,
         addr: String,
         available_memory_mb: u64,
-    ) -> Option<bool> {
+    ) -> Option<PeerConnectionTransition> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -133,9 +154,9 @@ impl PeerManager {
                     "[PeerManager] 用户重新上线: {} ({}) - 可用内存: {} MB",
                     peer.name, peer.id, available_memory_mb
                 );
-                return Some(true); // 重新上线，返回 true
+                return Some(PeerConnectionTransition::Reconnected);
             }
-            return Some(false); // 只是更新，返回 false
+            return Some(PeerConnectionTransition::Unchanged);
         } else {
             // 新用户
             let peer = Peer {
@@ -153,7 +174,7 @@ impl PeerManager {
                 name, id, available_memory_mb
             );
             peers.insert(id, peer);
-            return Some(true); // 新用户，返回 true
+            return Some(PeerConnectionTransition::New);
         }
     }
 
@@ -412,5 +433,23 @@ mod presence_tests {
         let peer = manager.peers.read().unwrap().get("peer").unwrap().clone();
         assert!(!peer.is_offline);
         assert_eq!(peer.available_memory_mb, 256);
+    }
+
+    #[test]
+    fn discovery_distinguishes_new_reconnected_and_heartbeat() {
+        let manager = PeerManager::new();
+        assert_eq!(
+            manager.observe_discovery("peer".into(), "对端".into(), "127.0.0.1:8888".into(), 128,),
+            Some(PeerConnectionTransition::New),
+        );
+        assert_eq!(
+            manager.observe_discovery("peer".into(), "对端".into(), "127.0.0.1:8888".into(), 128,),
+            Some(PeerConnectionTransition::Unchanged),
+        );
+        manager.force_mark_offline("peer");
+        assert_eq!(
+            manager.observe_discovery("peer".into(), "对端".into(), "127.0.0.1:8888".into(), 128,),
+            Some(PeerConnectionTransition::Reconnected),
+        );
     }
 }
