@@ -71,6 +71,8 @@ pub struct Config {
     pub lang: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub close_to_tray: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_minimized: Option<bool>,
 }
 
 impl Default for Config {
@@ -80,6 +82,7 @@ impl Default for Config {
             port: None,
             lang: None,
             close_to_tray: None,
+            start_minimized: None,
         }
     }
 }
@@ -226,5 +229,17 @@ pub fn get_close_to_tray_from_config() -> bool {
 pub fn save_close_to_tray_to_config(enabled: bool) -> Result<(), String> {
     let mut cfg = read_config();
     cfg.close_to_tray = Some(enabled);
+    write_config(&cfg)
+}
+
+/// 启动时是否直接隐藏到系统托盘。未配置时默认开启，保持原有开机自启行为。
+pub fn get_start_minimized_from_config() -> bool {
+    read_config().start_minimized.unwrap_or(true)
+}
+
+/// 保存启动时隐藏到系统托盘的行为。
+pub fn save_start_minimized_to_config(enabled: bool) -> Result<(), String> {
+    let mut cfg = read_config();
+    cfg.start_minimized = Some(enabled);
     write_config(&cfg)
 }

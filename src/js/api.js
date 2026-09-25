@@ -90,7 +90,7 @@ async function apiGetSettings() {
 }
 
 // 更新设置
-async function apiUpdateSettings(downloadPath, port, dbPath, autoDownload, closeToTray) {
+async function apiUpdateSettings(downloadPath, port, dbPath, autoDownload, closeToTray, startMinimized) {
   const tauri = getTauri();
 
   if (tauri) {
@@ -103,6 +103,7 @@ async function apiUpdateSettings(downloadPath, port, dbPath, autoDownload, close
         dbPath,
         autoDownload,
         closeToTray,
+        startMinimized,
       });
     } catch (e) {
       console.error("[JS-API] Failed to update settings:", e);
@@ -121,6 +122,7 @@ async function apiUpdateSettings(downloadPath, port, dbPath, autoDownload, close
           db_path: dbPath,
           auto_download: autoDownload,
           close_to_tray: closeToTray,
+          start_minimized: startMinimized,
         }),
       });
       const data = await resp.json();

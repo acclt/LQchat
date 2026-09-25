@@ -152,7 +152,7 @@ body.windows-app .toggle-slider { background: #d5d9e3; }
 body.windows-app .toggle-switch input:checked + .toggle-slider { background: var(--desktop-accent); }
 body.windows-app input[type=checkbox] { accent-color: var(--desktop-accent); }
 body.windows-app #auto-download-toggle { width: 20px; height: 20px; margin: 0 12px; }
-body.windows-app #settings-panel :is(#close-to-tray-setting,#autostart-setting) { padding: 15px 18px; border: 1px solid var(--desktop-line); border-radius: 16px; background: #fff; }
+body.windows-app #settings-panel :is(#close-to-tray-setting,#autostart-setting,#start-minimized-setting) { padding: 15px 18px; border: 1px solid var(--desktop-line); border-radius: 16px; background: #fff; }
 body.windows-app .setting-label-row { gap: 16px; margin: 0; }
 body.windows-app .setting-label-row > label:first-child { font-size: 13px; font-weight: 500; }
 body.windows-app .setting-hint { margin: 6px 0 0; color: var(--desktop-muted); font-size: 11px; }

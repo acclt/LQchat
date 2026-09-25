@@ -23,6 +23,10 @@ struct Args {
     notification_activation: Option<String>,
 }
 
+fn initial_main_window_visible(start_minimized: bool, launched_from_notification: bool) -> bool {
+    launched_from_notification || !start_minimized
+}
+
 fn main() {
     // Workaround: WebKitGTK DMABUF renderer + NVIDIA + Wayland 导致
     // Gdk-Message: Error 71 (protocol error) dispatching to Wayland display.
@@ -40,6 +44,8 @@ fn main() {
 
     let args = Args::parse();
 
+    let launched_from_notification = args.notification_activation.is_some();
+
     #[cfg(windows)]
     if let Some(argument) = args.notification_activation.as_deref() {
         let _ = lanchat::notification_sync::store_windows_activation(argument);
@@ -47,7 +53,9 @@ fn main() {
 
     let cli_port = args.port;
     let cli_db_path = args.db_path;
-    let launched_from_autostart = args.autostart;
+    let start_minimized = lanchat::config_file::get_start_minimized_from_config();
+    let main_window_starts_visible =
+        initial_main_window_visible(start_minimized, launched_from_notification);
 
     let mut context = tauri::generate_context!();
     #[cfg(windows)]
@@ -60,31 +68,39 @@ fn main() {
     }
 
     let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            if args.iter().any(|arg| arg == "--autostart") {
-                return;
-            }
-            #[cfg(windows)]
-            {
-                if let Some(argument) = args
-                    .windows(2)
-                    .find(|pair| pair[0] == "--notification-activation")
-                    .map(|pair| pair[1].as_str())
+        .plugin(tauri_plugin_single_instance::init(
+            move |app, args, _cwd| {
+                if args.iter().any(|arg| arg == "--autostart") {
+                    return;
+                }
+                let mut launched_from_notification = false;
+                #[cfg(windows)]
                 {
-                    if let Some(payload) =
-                        lanchat::notification_sync::store_windows_activation(argument)
+                    if let Some(argument) = args
+                        .windows(2)
+                        .find(|pair| pair[0] == "--notification-activation")
+                        .map(|pair| pair[1].as_str())
                     {
-                        let _ = app.emit("synced-notification-tapped", payload);
+                        if let Some(payload) =
+                            lanchat::notification_sync::store_windows_activation(argument)
+                        {
+                            let _ = app.emit("synced-notification-tapped", payload);
+                        }
+                        launched_from_notification = true;
                     }
                 }
-            }
-            // 当尝试启动第二个实例时，显示已存在的窗口
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-                let _ = window.unminimize();
-            }
-        }))
+                // 双击启动也遵循“启动时自动缩小”；通知点击仍必须打开窗口。
+                if start_minimized && !launched_from_notification {
+                    return;
+                }
+                // 当尝试启动第二个实例时，显示已存在的窗口
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                    let _ = window.unminimize();
+                }
+            },
+        ))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
@@ -184,6 +200,9 @@ fn main() {
                 let webview_dir = lanchat::config_file::windows_portable_webview_dir()
                     .map_err(std::io::Error::other)?;
                 tauri::WebviewWindowBuilder::from_config(app.handle(), &window_config)?
+                    // A minimized launch must create the native window hidden. Hiding it after
+                    // build() is too late and briefly flashes an unpainted frame on Windows.
+                    .visible(main_window_starts_visible)
                     .data_directory(webview_dir)
                     .build()?;
             }
@@ -192,7 +211,7 @@ fn main() {
 
             // 获取主窗口并设置关闭事件处理
             if let Some(window) = app.get_webview_window("main") {
-                if launched_from_autostart {
+                if !main_window_starts_visible {
                     let _ = window.hide();
                 }
                 let window_clone = window.clone();
@@ -462,4 +481,24 @@ fn main() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::initial_main_window_visible;
+
+    #[test]
+    fn minimized_setting_hides_the_initial_window_for_all_regular_launches() {
+        assert!(!initial_main_window_visible(true, false));
+    }
+
+    #[test]
+    fn disabled_minimized_setting_shows_the_initial_window() {
+        assert!(initial_main_window_visible(false, false));
+    }
+
+    #[test]
+    fn notification_activation_always_shows_the_window() {
+        assert!(initial_main_window_visible(true, true));
+    }
 }

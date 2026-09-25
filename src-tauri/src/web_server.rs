@@ -219,6 +219,7 @@ async fn get_settings_http(State(state): State<Arc<AppState>>) -> impl IntoRespo
 
     let cfg = crate::config_file::read_config();
     let close_to_tray = cfg.close_to_tray.unwrap_or(true);
+    let start_minimized = cfg.start_minimized.unwrap_or(true);
     let db_path = cfg
         .db_path
         .unwrap_or_else(crate::config_file::get_default_db_path);
@@ -231,6 +232,7 @@ async fn get_settings_http(State(state): State<Arc<AppState>>) -> impl IntoRespo
         "db_path": db_path,
         "auto_download": auto_download,
         "close_to_tray": close_to_tray,
+        "start_minimized": start_minimized,
     }))
     .into_response()
 }
@@ -242,6 +244,7 @@ struct UpdateSettingsRequest {
     db_path: Option<String>,
     auto_download: Option<bool>,
     close_to_tray: Option<bool>,
+    start_minimized: Option<bool>,
 }
 
 async fn update_settings_http(
@@ -291,6 +294,13 @@ async fn update_settings_http(
     if let Some(enabled) = payload.close_to_tray {
         if !cfg!(target_os = "android") {
             if let Err(e) = crate::config_file::save_close_to_tray_to_config(enabled) {
+                return (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })).into_response();
+            }
+        }
+    }
+    if let Some(enabled) = payload.start_minimized {
+        if !cfg!(target_os = "android") {
+            if let Err(e) = crate::config_file::save_start_minimized_to_config(enabled) {
                 return (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })).into_response();
             }
         }

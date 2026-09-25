@@ -2758,6 +2758,7 @@ function initSettings() {
   let initialNotificationSound = true;
   let initialCloseToTray = true;
   let initialAutostart = false;
+  let initialStartMinimized = true;
   let androidDownloadTarget = "";
   const autoDownloadToggle = document.getElementById("auto-download-toggle");
   const notificationToggle = document.getElementById("notification-toggle");
@@ -2767,6 +2768,8 @@ function initSettings() {
   const closeToTrayToggle = document.getElementById("close-to-tray-toggle");
   const autostartSetting = document.getElementById("autostart-setting");
   const autostartToggle = document.getElementById("autostart-toggle");
+  const startMinimizedSetting = document.getElementById("start-minimized-setting");
+  const startMinimizedToggle = document.getElementById("start-minimized-toggle");
   const backgroundReceiveSetting = document.getElementById("background-receive-setting");
   const backgroundReceiveStatus = document.getElementById("background-receive-status");
   const backgroundReceiveError = document.getElementById("background-receive-error");
@@ -2903,6 +2906,9 @@ function initSettings() {
   }
   if (autostartSetting && !isWindowsDesktop) {
     autostartSetting.style.display = "none";
+  }
+  if (startMinimizedSetting && !isWindowsDesktop) {
+    startMinimizedSetting.style.display = "none";
   }
   if (backgroundReceiveSetting && isAndroid) {
     backgroundReceiveSetting.style.display = "block";
@@ -3064,6 +3070,8 @@ function initSettings() {
           initialCloseToTray = closeToTrayToggle.checked;
           initialAutostart = await window.__TAURI__.core.invoke("get_autostart_enabled").catch(() => false);
           autostartToggle.checked = initialAutostart;
+          startMinimizedToggle.checked = settings.start_minimized !== false;
+          initialStartMinimized = startMinimizedToggle.checked;
         }
         if (window.__TAURI__) {
           if (isAndroid) {
@@ -3256,6 +3264,7 @@ function initSettings() {
       }
       const closeToTray = isWindowsDesktop ? closeToTrayToggle.checked : undefined;
       const autostartEnabled = isWindowsDesktop ? autostartToggle.checked : false;
+      const startMinimized = isWindowsDesktop ? startMinimizedToggle.checked : undefined;
       const nameChanged = isAndroid && deviceName !== initialName;
       const backgroundSettings = isAndroid ? {
         keep_running: backgroundKeepRunningToggle.checked,
@@ -3275,7 +3284,7 @@ function initSettings() {
         }
       }
 
-      await apiUpdateSettings(dlPath, myPort, myDbPath, autoDl, closeToTray);
+      await apiUpdateSettings(dlPath, myPort, myDbPath, autoDl, closeToTray, startMinimized);
       if (nameChanged) {
         const updatedName = await apiUpdateMyName(deviceName);
         initialName = updatedName;
@@ -3299,6 +3308,7 @@ function initSettings() {
       // 检测是否有实际改动
       const portChanged = myPort !== initialPort;
       const dbPathChanged = myDbPath !== initialDbPath;
+      const startMinimizedChanged = isWindowsDesktop && startMinimized !== initialStartMinimized;
 
       const finishSave = () => {
         if (settingsSession !== saveSession || settingsPanel.style.display !== "block" ||
@@ -3323,7 +3333,7 @@ function initSettings() {
         return;
       }
 
-      if (portChanged || dbPathChanged) {
+      if (portChanged || dbPathChanged || startMinimizedChanged) {
         settingsSuccessMsg.textContent = t("settings_save_restart");
       } else {
         settingsSuccessMsg.textContent = t("settings_saved");
@@ -3539,7 +3549,9 @@ const i18n = {
     auto_download_label: "自动下载:",
     close_to_tray_label: "点击 X 时最小化到托盘:",
     autostart_label: "开机自动启动 LQChat:",
-    autostart_hint: "自动启动时隐藏到托盘",
+    autostart_hint: "是否随 Windows 登录启动；启动后的显示方式由下方开关控制",
+    start_minimized_label: "启动时自动缩小到托盘:",
+    start_minimized_hint: "同时控制开机自启和双击启动，不显示启动窗口",
     settings_save_restart: "✓ 设置保存成功，需重启生效",
     settings_saved: "✓ 设置保存成功",
     settings_save_fail: "保存失败",
@@ -3585,7 +3597,9 @@ const i18n = {
     auto_download_label: "Auto Download:",
     close_to_tray_label: "Minimize to tray when clicking X:",
     autostart_label: "Start LQChat when Windows starts:",
-    autostart_hint: "Starts hidden in the system tray",
+    autostart_hint: "Controls whether LQChat starts when you sign in to Windows",
+    start_minimized_label: "Start minimized to tray:",
+    start_minimized_hint: "Applies to both Windows autostart and double-click launches",
     settings_save_restart: "✓ Saved, restart to apply",
     settings_saved: "✓ Saved",
     settings_save_fail: "Save failed",

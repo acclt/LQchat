@@ -420,6 +420,7 @@ pub async fn get_settings(state: State<'_, DbState>) -> Result<serde_json::Value
         .unwrap_or_else(|| "8888".to_string());
     let cfg = crate::config_file::read_config();
     let close_to_tray = cfg.close_to_tray.unwrap_or(true);
+    let start_minimized = cfg.start_minimized.unwrap_or(true);
     let db_path = cfg
         .db_path
         .unwrap_or_else(crate::config_file::get_default_db_path);
@@ -431,6 +432,7 @@ pub async fn get_settings(state: State<'_, DbState>) -> Result<serde_json::Value
         "db_path": db_path,
         "auto_download": auto_download,
         "close_to_tray": close_to_tray,
+        "start_minimized": start_minimized,
     }))
 }
 
@@ -442,6 +444,7 @@ pub async fn update_settings(
     db_path: Option<String>,
     auto_download: Option<bool>,
     close_to_tray: Option<bool>,
+    start_minimized: Option<bool>,
 ) -> Result<(), String> {
     if let Some(path) = download_path {
         crate::db::update_download_path(&state.pool, path).await?;
@@ -474,6 +477,10 @@ pub async fn update_settings(
     if let Some(_enabled) = close_to_tray {
         #[cfg(not(target_os = "android"))]
         crate::config_file::save_close_to_tray_to_config(_enabled)?;
+    }
+    if let Some(_enabled) = start_minimized {
+        #[cfg(not(target_os = "android"))]
+        crate::config_file::save_start_minimized_to_config(_enabled)?;
     }
 
     Ok(())
