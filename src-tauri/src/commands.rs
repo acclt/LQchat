@@ -2610,9 +2610,20 @@ pub fn clear_notification(_app: tauri::AppHandle, #[allow(unused_variables)] fro
 // ═══════════════════════════════════════════════════════════════
 
 #[cfg(not(target_os = "android"))]
-const ICON_EMPTY: &[u8] = include_bytes!("../icons/icon_empty.png");
-#[cfg(not(target_os = "android"))]
 const ICON_NORMAL: &[u8] = include_bytes!("../icons/32x32.png");
+
+/// 保留原图标的透明轮廓，仅降低可见像素亮度，供托盘闪烁使用。
+#[cfg(not(target_os = "android"))]
+fn dim_tray_icon_rgba(rgba: &[u8]) -> Vec<u8> {
+    let mut dimmed = rgba.to_vec();
+    for pixel in dimmed.chunks_exact_mut(4) {
+        pixel[0] = ((pixel[0] as u16 * 45) / 100) as u8;
+        pixel[1] = ((pixel[1] as u16 * 45) / 100) as u8;
+        pixel[2] = ((pixel[2] as u16 * 45) / 100) as u8;
+        // Alpha 保持不变，避免 Windows 将透明区域渲染成黑色方框。
+    }
+    dimmed
+}
 
 /// 开始托盘闪烁
 #[tauri::command]
@@ -2643,18 +2654,16 @@ pub fn start_tray_flash(
                     return;
                 }
             };
-            let empty_img = match Image::from_bytes(ICON_EMPTY) {
-                Ok(img) => img,
-                Err(e) => {
-                    eprintln!("[TrayFlash] 无法加载空白图标: {}", e);
-                    return;
-                }
-            };
+            let dimmed_img = Image::new_owned(
+                dim_tray_icon_rgba(normal_img.rgba()),
+                normal_img.width(),
+                normal_img.height(),
+            );
 
             let mut toggle = false;
             while flashing.load(Ordering::Relaxed) {
                 if let Some(tray) = app.tray_by_id("main") {
-                    let icon = if toggle { &normal_img } else { &empty_img };
+                    let icon = if toggle { &normal_img } else { &dimmed_img };
                     let _ = tray.set_icon(Some(icon.clone() as tauri::image::Image));
                 } else {
                     eprintln!("[TrayFlash] 找不到托盘 'main'");
@@ -2683,4 +2692,16 @@ pub fn stop_tray_flash(#[allow(unused_variables)] state: State<'_, TrayFlashStat
     }
     #[cfg(target_os = "android")]
     println!("[TrayFlash] Android 无系统托盘，忽略 stop_tray_flash");
+}
+
+#[cfg(all(test, not(target_os = "android")))]
+mod tray_icon_tests {
+    use super::dim_tray_icon_rgba;
+
+    #[test]
+    fn dimmed_tray_icon_keeps_alpha_and_scales_rgb() {
+        let rgba = [200, 100, 50, 128, 0, 0, 0, 0];
+
+        assert_eq!(dim_tray_icon_rgba(&rgba), [90, 45, 22, 128, 0, 0, 0, 0]);
+    }
 }
