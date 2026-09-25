@@ -1,6 +1,6 @@
 [package]
 name = "lanchat"
-version = "11.0.0"
+version = "11.3.0"
 edition = "2021"
 default-run = "LQChat"
 
@@ -81,6 +81,7 @@ windows = { version = "0.61.3", features = [
     "Data_Xml_Dom",
     "UI_Notifications",
     "Win32_Foundation",
+    "Win32_Media_Audio",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Variant",

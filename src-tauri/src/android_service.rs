@@ -187,10 +187,16 @@ mod android {
                         Some((pool, _)) => crate::db::get_notifications_enabled(&pool).await,
                         None => false,
                     };
+                    let notification_sound_enabled = match CoreRuntime::global().shared_resources()
+                    {
+                        Some((pool, _)) => crate::db::get_notification_sound_enabled(&pool).await,
+                        None => false,
+                    };
                     let json = serde_json::json!({
                         "event": event,
                         "ui_visible": super::ui_visible(),
                         "notifications_enabled": notifications_enabled,
+                        "notification_sound_enabled": notification_sound_enabled,
                     });
                     if let Err(error) = deliver_event(&vm, &service, json.to_string()) {
                         eprintln!("[AndroidEventBridge] JNI 回调失败: {error}");

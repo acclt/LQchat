@@ -1310,6 +1310,37 @@ pub async fn set_notifications_enabled(
     Ok(())
 }
 
+/// 获取消息与文件通知音效开关状态（默认开启）。
+pub async fn get_notification_sound_enabled(pool: &sqlx::Pool<sqlx::Sqlite>) -> bool {
+    let res = sqlx::query_as::<_, (String,)>(
+        "SELECT value FROM settings WHERE key = 'notification_sound_enabled'",
+    )
+    .fetch_one(pool)
+    .await;
+
+    match res {
+        Ok((val,)) => val == "true",
+        Err(_) => true,
+    }
+}
+
+/// 设置消息与文件通知音效开关状态。
+pub async fn set_notification_sound_enabled(
+    pool: &sqlx::Pool<sqlx::Sqlite>,
+    enabled: bool,
+) -> Result<(), String> {
+    let val = if enabled { "true" } else { "false" };
+    sqlx::query(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES ('notification_sound_enabled', ?)",
+    )
+    .bind(val)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("保存通知音效设置失败: {e}"))?;
+    println!("[DB] 通知音效状态已设置为: {val}");
+    Ok(())
+}
+
 // ── 自动下载开关 ──────────────────────────────────────────────
 
 /// 获取自动下载开关状态（默认开启）
@@ -1591,6 +1622,9 @@ mod windows_portable_tests {
                 .await
                 .unwrap();
         assert_eq!(stored, WINDOWS_PORTABLE_DOWNLOAD_SENTINEL);
+        assert!(get_notification_sound_enabled(&pool).await);
+        set_notification_sound_enabled(&pool, false).await.unwrap();
+        assert!(!get_notification_sound_enabled(&pool).await);
         assert_eq!(
             get_download_path(&pool).await.unwrap(),
             crate::config_file::windows_portable_download_dir()

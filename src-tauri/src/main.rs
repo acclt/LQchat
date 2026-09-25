@@ -149,6 +149,8 @@ fn main() {
             lanchat::commands::request_file,
             lanchat::commands::get_notifications_enabled,
             lanchat::commands::set_notifications_enabled,
+            lanchat::commands::get_notification_sound_enabled,
+            lanchat::commands::set_notification_sound_enabled,
             lanchat::commands::get_background_receive_state,
             lanchat::commands::get_background_runtime_settings,
             lanchat::commands::set_background_runtime_settings,
@@ -401,16 +403,38 @@ fn main() {
                         if let Some((title, body)) =
                             lanchat::commands::windows_notification_for_core_event(&event)
                         {
+                            let notifications_enabled =
+                                lanchat::db::get_notifications_enabled(&notification_pool).await;
+                            let uses_embedded_sound =
+                                lanchat::commands::windows_notification_sound_for_core_event(
+                                    &event,
+                                );
+                            if notifications_enabled
+                                && uses_embedded_sound
+                                && lanchat::db::get_notification_sound_enabled(&notification_pool)
+                                    .await
+                            {
+                                if let Err(error) =
+                                    lanchat::commands::play_windows_notification_sound()
+                                {
+                                    eprintln!("[NotificationSound] {error}");
+                                }
+                            }
                             let window_focused = ui_handle
                                 .get_webview_window("main")
                                 .and_then(|window| window.is_focused().ok())
                                 .unwrap_or(false);
-                            if !window_focused
-                                && lanchat::db::get_notifications_enabled(&notification_pool).await
-                            {
-                                match lanchat::commands::show_windows_system_notification(
-                                    &title, &body,
-                                ) {
+                            if !window_focused && notifications_enabled {
+                                let result = if uses_embedded_sound {
+                                    lanchat::commands::show_windows_system_notification_silent(
+                                        &title, &body,
+                                    )
+                                } else {
+                                    lanchat::commands::show_windows_system_notification(
+                                        &title, &body,
+                                    )
+                                };
+                                match result {
                                     Ok(()) => println!("[Notification] Windows 系统通知已发送"),
                                     Err(error) => eprintln!("[Notification] {error}"),
                                 }

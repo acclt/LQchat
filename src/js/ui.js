@@ -2755,11 +2755,13 @@ function initSettings() {
   let initialDlPath = "";
   let initialAutoDl = true;
   let initialNotifications = true;
+  let initialNotificationSound = true;
   let initialCloseToTray = true;
   let initialAutostart = false;
   let androidDownloadTarget = "";
   const autoDownloadToggle = document.getElementById("auto-download-toggle");
   const notificationToggle = document.getElementById("notification-toggle");
+  const notificationSoundToggle = document.getElementById("notification-sound-toggle");
   const notificationHint = document.getElementById("notification-permission-hint");
   const closeToTraySetting = document.getElementById("close-to-tray-setting");
   const closeToTrayToggle = document.getElementById("close-to-tray-toggle");
@@ -3084,6 +3086,8 @@ function initSettings() {
           }
           initialNotifications = await window.__TAURI__.core.invoke("get_notifications_enabled").catch(() => true);
           notificationToggle.checked = initialNotifications;
+          initialNotificationSound = await window.__TAURI__.core.invoke("get_notification_sound_enabled").catch(() => true);
+          notificationSoundToggle.checked = initialNotificationSound;
           if (isAndroid && typeof Notification !== "undefined" && Notification.permission === "denied") {
             notificationHint.textContent = "系统通知权限已关闭，请在系统设置中允许 LQChat 通知。";
           } else {
@@ -3235,6 +3239,7 @@ function initSettings() {
       const myDbPath = dbPathInput.value.trim() || "";
       const autoDl = autoDownloadToggle.checked;
       const notificationsEnabled = notificationToggle.checked;
+      const notificationSoundEnabled = notificationSoundToggle.checked;
       const batteryAlertEnabled = isAndroid && batteryAlertToggle.checked;
       const batteryAlertIntervalSeconds = isAndroid ? Number(batteryAlertIntervalInput.value) : 5;
       const batteryAlertRepeatCount = isAndroid ? Number(batteryAlertRepeatInput.value) : 3;
@@ -3279,6 +3284,7 @@ function initSettings() {
       }
       if (window.__TAURI__) {
         await window.__TAURI__.core.invoke("set_notifications_enabled", { enabled: notificationsEnabled });
+        await window.__TAURI__.core.invoke("set_notification_sound_enabled", { enabled: notificationSoundEnabled });
         window._notificationsEnabled = notificationsEnabled;
         if (isWindowsDesktop && autostartEnabled !== initialAutostart) {
           await window.__TAURI__.core.invoke("set_autostart_enabled", { enabled: autostartEnabled });
@@ -3310,6 +3316,7 @@ function initSettings() {
         initialDlPath = dlPath;
         initialAutoDl = autoDl;
         initialNotifications = notificationsEnabled;
+        initialNotificationSound = notificationSoundEnabled;
         showMessageActionToast(portChanged || dbPathChanged
           ? "保存成功，部分设置需重启后生效" : "保存成功", 2400);
         finishSave();

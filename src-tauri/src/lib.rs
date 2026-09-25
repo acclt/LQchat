@@ -178,6 +178,8 @@ pub fn run() {
             commands::clear_notification,
             commands::get_notifications_enabled,
             commands::set_notifications_enabled,
+            commands::get_notification_sound_enabled,
+            commands::set_notification_sound_enabled,
             commands::get_background_receive_state,
             commands::get_background_runtime_settings,
             commands::set_background_runtime_settings,

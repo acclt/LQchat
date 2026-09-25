@@ -6,13 +6,17 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
+import android.content.ContentResolver
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.media.AudioAttributes
+import android.media.MediaPlayer
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiManager
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -51,10 +55,13 @@ class LanChatForegroundService : Service() {
         private const val TAG = "LanChatService"
         private const val SERVICE_CHANNEL = "lanchat_background_service"
         internal const val MESSAGE_CHANNEL = "lanchat_messages_v2"
+        internal const val DATA_SOUND_CHANNEL = "lanchat_messages_files_sound_v1"
+        internal const val DATA_SILENT_CHANNEL = "lanchat_messages_files_silent_v1"
         private const val SERVICE_NOTIFICATION_ID = 4100
         private const val ERROR_NOTIFICATION_ID = 9100
         private const val MESSAGE_NOTIFICATION_BASE = 10000
         private const val DISCONNECT_NOTIFICATION_BASE = 18000
+        internal const val DATA_SOUND_COOLDOWN_MS = 800L
         private const val RUNNING_NOTIFICATION_TEXT = "通知转发与接收服务正在运行"
         private const val SHORT_WAKE_TIMEOUT_MS = 15_000L
         private const val TRANSFER_WAKE_TIMEOUT_MS = 120_000L
@@ -365,6 +372,12 @@ class LanChatForegroundService : Service() {
         }
         private fun displayPeerName(peerName: String): String =
             peerName.trim().takeIf { it.isNotEmpty() } ?: "局域网设备"
+
+        internal fun shouldPlayDataNotificationSound(
+            enabled: Boolean,
+            lastPlayedAtMs: Long,
+            nowMs: Long,
+        ): Boolean = enabled && (lastPlayedAtMs <= 0L || nowMs - lastPlayedAtMs >= DATA_SOUND_COOLDOWN_MS)
     }
 
     init { System.loadLibrary("lanchat") }
@@ -406,6 +419,8 @@ class LanChatForegroundService : Service() {
     private var multicastLock: WifiManager.MulticastLock? = null
     private var transferWakeLock: PowerManager.WakeLock? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var activeNotificationSound: MediaPlayer? = null
+    private var lastNotificationSoundAtMs = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -473,6 +488,7 @@ class LanChatForegroundService : Service() {
         mainHandler.removeCallbacks(startupRecoveryRunnable)
         foregroundEstablished = false
         stopHealthMonitor()
+        releaseNotificationSound()
         if (!mayRecover) beginExit()
         super.onDestroy()
     }
@@ -744,20 +760,28 @@ class LanChatForegroundService : Service() {
                         releaseTransferWakeLock()
                         withShortWakeLock {
                             if (payload.optString("from_id").isNotBlank() &&
-                                !envelope.optBoolean("ui_visible") &&
                                 envelope.optBoolean("notifications_enabled", true)
                             ) {
-                                postDataNotification(type, payload)
+                                val soundEnabled = envelope.optBoolean("notification_sound_enabled", true)
+                                if (envelope.optBoolean("ui_visible")) {
+                                    playDataNotificationSoundIfAllowed(soundEnabled)
+                                } else {
+                                    postDataNotification(type, payload, soundEnabled)
+                                }
                             }
                         }
                     }
                     "message_received", "file_offer_received" -> {
                         withShortWakeLock {
                             if (payload.optString("from_id").isNotBlank() &&
-                                !envelope.optBoolean("ui_visible") &&
                                 envelope.optBoolean("notifications_enabled", true)
                             ) {
-                                postDataNotification(type, payload)
+                                val soundEnabled = envelope.optBoolean("notification_sound_enabled", true)
+                                if (envelope.optBoolean("ui_visible")) {
+                                    playDataNotificationSoundIfAllowed(soundEnabled)
+                                } else {
+                                    postDataNotification(type, payload, soundEnabled)
+                                }
                             }
                         }
                     }
@@ -864,13 +888,43 @@ class LanChatForegroundService : Service() {
                 setShowBadge(false)
             },
         )
+        val soundAttributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        notificationManager.createNotificationChannel(
+            NotificationChannel(
+                DATA_SOUND_CHANNEL,
+                "LQChat 消息和文件音效",
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply {
+                description = "新消息、图片、文件邀请和文件接收完成"
+                enableVibration(true)
+                setShowBadge(true)
+                setSound(dataNotificationSoundUri(), soundAttributes)
+                lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+            },
+        )
+        notificationManager.createNotificationChannel(
+            NotificationChannel(
+                DATA_SILENT_CHANNEL,
+                "LQChat 消息和文件（静音）",
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply {
+                description = "通知音效关闭时使用"
+                enableVibration(true)
+                setShowBadge(true)
+                setSound(null, null)
+                lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+            },
+        )
         notificationManager.createNotificationChannel(
             NotificationChannel(
                 MESSAGE_CHANNEL,
-                "LQChat 消息和文件",
+                "LQChat 连接与服务状态",
                 NotificationManager.IMPORTANCE_HIGH,
             ).apply {
-                description = "新消息、文件完成和服务错误"
+                description = "局域网设备连接、断开和服务错误"
                 enableVibration(true)
                 setShowBadge(true)
                 lockscreenVisibility = Notification.VISIBILITY_PRIVATE
@@ -1021,7 +1075,58 @@ class LanChatForegroundService : Service() {
         }.onFailure { android.util.Log.w(TAG, "设备连接提醒发送失败", it) }
     }
 
-    private fun postDataNotification(type: String, payload: JSONObject) {
+    private fun dataNotificationSoundUri(): Uri = Uri.parse(
+        "${ContentResolver.SCHEME_ANDROID_RESOURCE}://$packageName/${R.raw.lqchat_notification}",
+    )
+
+    private fun claimDataNotificationSound(enabled: Boolean): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        if (!shouldPlayDataNotificationSound(enabled, lastNotificationSoundAtMs, now)) return false
+        lastNotificationSoundAtMs = now
+        return true
+    }
+
+    private fun playDataNotificationSoundIfAllowed(enabled: Boolean) {
+        if (!claimDataNotificationSound(enabled)) return
+        runCatching {
+            releaseNotificationSound()
+            val descriptor = resources.openRawResourceFd(R.raw.lqchat_notification)
+            val player = MediaPlayer()
+            player.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build(),
+            )
+            player.setDataSource(descriptor.fileDescriptor, descriptor.startOffset, descriptor.length)
+            descriptor.close()
+            player.setOnCompletionListener {
+                if (activeNotificationSound === it) activeNotificationSound = null
+                it.release()
+            }
+            player.setOnErrorListener { failed, _, _ ->
+                if (activeNotificationSound === failed) activeNotificationSound = null
+                failed.release()
+                true
+            }
+            player.prepare()
+            activeNotificationSound = player
+            player.start()
+        }.onFailure {
+            lastNotificationSoundAtMs = 0L
+            android.util.Log.w(TAG, "通知音效播放失败", it)
+        }
+    }
+
+    private fun releaseNotificationSound() {
+        activeNotificationSound?.let { player ->
+            runCatching { if (player.isPlaying) player.stop() }
+            runCatching { player.release() }
+        }
+        activeNotificationSound = null
+    }
+
+    private fun postDataNotification(type: String, payload: JSONObject, soundEnabled: Boolean) {
         val peerId = payload.optString("from_id")
         val fromName = payload.optString("from_name", "局域网设备")
         val body = when (type) {
@@ -1031,7 +1136,9 @@ class LanChatForegroundService : Service() {
         }
         val idSeed = payload.optLong("id", System.currentTimeMillis())
         val notificationId = notificationIdFor(idSeed)
-        val notification = NotificationCompat.Builder(this, MESSAGE_CHANNEL)
+        val playSound = claimDataNotificationSound(soundEnabled)
+        val channel = if (playSound) DATA_SOUND_CHANNEL else DATA_SILENT_CHANNEL
+        val builder = NotificationCompat.Builder(this, channel)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(fromName)
             .setContentText(body)
@@ -1040,9 +1147,10 @@ class LanChatForegroundService : Service() {
             .setAutoCancel(true)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setDefaults(NotificationCompat.DEFAULT_LIGHTS or NotificationCompat.DEFAULT_VIBRATE)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .build()
+        if (Build.VERSION.SDK_INT < 26 && playSound) builder.setSound(dataNotificationSoundUri())
+        val notification = builder.build()
         runCatching { notificationManager.notify(notificationId, notification) }
             .onFailure { android.util.Log.w(TAG, "消息通知发送失败", it) }
     }

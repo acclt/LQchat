@@ -200,6 +200,12 @@ class LanChatServiceContractTest {
         assertTrue(first in 10_000 until 18_000)
         assertNotEquals(4_100, first)
         assertEquals("lanchat_messages_v2", LanChatForegroundService.MESSAGE_CHANNEL)
+        assertEquals("lanchat_messages_files_sound_v1", LanChatForegroundService.DATA_SOUND_CHANNEL)
+        assertEquals("lanchat_messages_files_silent_v1", LanChatForegroundService.DATA_SILENT_CHANNEL)
+        assertFalse(LanChatForegroundService.shouldPlayDataNotificationSound(false, 0L, 1_000L))
+        assertTrue(LanChatForegroundService.shouldPlayDataNotificationSound(true, 0L, 1_000L))
+        assertFalse(LanChatForegroundService.shouldPlayDataNotificationSound(true, 1_000L, 1_799L))
+        assertTrue(LanChatForegroundService.shouldPlayDataNotificationSound(true, 1_000L, 1_800L))
     }
 
     @Test

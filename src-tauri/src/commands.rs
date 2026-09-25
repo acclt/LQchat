@@ -1982,6 +1982,21 @@ pub async fn set_notifications_enabled(
 }
 
 #[tauri::command]
+pub async fn get_notification_sound_enabled(
+    state: tauri::State<'_, crate::db::DbState>,
+) -> Result<bool, String> {
+    Ok(crate::db::get_notification_sound_enabled(&state.pool).await)
+}
+
+#[tauri::command]
+pub async fn set_notification_sound_enabled(
+    state: tauri::State<'_, crate::db::DbState>,
+    enabled: bool,
+) -> Result<(), String> {
+    crate::db::set_notification_sound_enabled(&state.pool, enabled).await
+}
+
+#[tauri::command]
 pub fn get_background_receive_state() -> serde_json::Value {
     let value = serde_json::to_value(crate::core_runtime::CoreRuntime::global().status())
         .unwrap_or_else(|_| serde_json::json!({"state": "ERROR"}));
@@ -2132,8 +2147,8 @@ fn ensure_windows_autostart_command(app_name: &str) -> Result<(), String> {
     use winreg::enums::{HKEY_CURRENT_USER, KEY_SET_VALUE};
     use winreg::RegKey;
 
-    let executable = std::env::current_exe()
-        .map_err(|error| format!("无法取得 LQChat 程序路径: {error}"))?;
+    let executable =
+        std::env::current_exe().map_err(|error| format!("无法取得 LQChat 程序路径: {error}"))?;
     let command = windows_autostart_command(&executable);
     RegKey::predef(HKEY_CURRENT_USER)
         .open_subkey_with_flags(WINDOWS_AUTOSTART_RUN_KEY, KEY_SET_VALUE)
@@ -2352,15 +2367,92 @@ pub fn ensure_windows_notification_identity() -> Result<(), String> {
 
 #[cfg(windows)]
 pub fn show_windows_system_notification(title: &str, body: &str) -> Result<(), String> {
+    show_windows_system_notification_with_sound(title, body, true)
+}
+
+#[cfg(windows)]
+pub fn show_windows_system_notification_silent(title: &str, body: &str) -> Result<(), String> {
+    show_windows_system_notification_with_sound(title, body, false)
+}
+
+#[cfg(windows)]
+fn show_windows_system_notification_with_sound(
+    title: &str,
+    body: &str,
+    use_system_sound: bool,
+) -> Result<(), String> {
     ensure_windows_notification_identity()?;
     use tauri_winrt_notification::{Duration, Sound, Toast};
-    Toast::new(WINDOWS_NOTIFICATION_APP_ID)
+    let toast = Toast::new(WINDOWS_NOTIFICATION_APP_ID)
         .title(title)
         .text1(body)
-        .duration(Duration::Short)
-        .sound(Some(Sound::Default))
+        .duration(Duration::Short);
+    let toast = if use_system_sound {
+        toast.sound(Some(Sound::Default))
+    } else {
+        toast.sound(None)
+    };
+    toast
         .show()
         .map_err(|error| format!("Windows 系统通知发送失败: {error}"))
+}
+
+#[cfg(windows)]
+const WINDOWS_NOTIFICATION_SOUND: &[u8] = include_bytes!("../assets/lqchat_notification.wav");
+
+#[cfg(windows)]
+static LAST_WINDOWS_NOTIFICATION_SOUND: std::sync::OnceLock<
+    std::sync::Mutex<Option<std::time::Instant>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(windows)]
+pub fn windows_notification_sound_for_core_event(event: &crate::core_events::CoreEvent) -> bool {
+    use crate::core_events::CoreEvent;
+    let payload = match event {
+        CoreEvent::MessageReceived(payload)
+        | CoreEvent::FileOfferReceived(payload)
+        | CoreEvent::FileTransferCompleted(payload) => payload,
+        _ => return false,
+    };
+    payload
+        .get("from_id")
+        .and_then(|value| value.as_str())
+        .is_some_and(|from_id| !from_id.is_empty() && from_id != "me")
+}
+
+/// Plays the embedded message/file chime at most once in an 800 ms burst.
+#[cfg(windows)]
+pub fn play_windows_notification_sound() -> Result<bool, String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
+
+    let now = std::time::Instant::now();
+    let mut last = LAST_WINDOWS_NOTIFICATION_SOUND
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .map_err(|_| "通知音效状态锁已损坏".to_string())?;
+    if last.is_some_and(|played| now.duration_since(played) < std::time::Duration::from_millis(800))
+    {
+        return Ok(false);
+    }
+    *last = Some(now);
+
+    // PlaySound treats pszSound as a WAVE memory image when SND_MEMORY is set.
+    // The bytes are static, so they remain valid for asynchronous playback.
+    let played = unsafe {
+        PlaySoundW(
+            PCWSTR(WINDOWS_NOTIFICATION_SOUND.as_ptr().cast()),
+            None,
+            SND_ASYNC | SND_MEMORY | SND_NODEFAULT,
+        )
+    }
+    .as_bool();
+    if played {
+        Ok(true)
+    } else {
+        *last = None;
+        Err("Windows 通知音效播放失败".to_string())
+    }
 }
 
 #[cfg(windows)]
@@ -2461,7 +2553,10 @@ pub fn show_notification(
 
 #[cfg(all(test, windows))]
 mod notification_tests {
-    use super::windows_notification_for_core_event;
+    use super::{
+        windows_notification_for_core_event, windows_notification_sound_for_core_event,
+        WINDOWS_NOTIFICATION_SOUND,
+    };
     use crate::core_events::CoreEvent;
 
     #[test]
@@ -2482,6 +2577,16 @@ mod notification_tests {
             "file_name": "demo.apk"
         }));
         assert_eq!(windows_notification_for_core_event(&progress), None);
+        assert!(windows_notification_sound_for_core_event(&incoming));
+        assert!(!windows_notification_sound_for_core_event(&progress));
+
+        let outgoing = CoreEvent::FileTransferCompleted(serde_json::json!({
+            "from_id": "me",
+            "file_name": "demo.apk"
+        }));
+        assert!(!windows_notification_sound_for_core_event(&outgoing));
+        assert_eq!(&WINDOWS_NOTIFICATION_SOUND[..4], b"RIFF");
+        assert_eq!(&WINDOWS_NOTIFICATION_SOUND[8..12], b"WAVE");
     }
 }
 
