@@ -468,6 +468,8 @@ pub async fn get_chat_history_with_offset(
 // ======================================
 // 补发挂起的文件（后台静默文件传输）
 // ======================================
+pub const FILE_TRANSFER_CHUNK_SIZE: usize = 10 * 1024 * 1024;
+
 async fn resend_file_background(
     my_id: &str,
     peer_addr: &str,
@@ -510,7 +512,7 @@ async fn resend_file_background(
     let client = crate::network::lan_http_client(Some(std::time::Duration::from_secs(300)))?;
 
     let upload_url = format!("http://{}/api/upload", peer_addr);
-    let chunk_size = 50 * 1024 * 1024;
+    let chunk_size = FILE_TRANSFER_CHUNK_SIZE as i64;
     let total_chunks = (file_size + chunk_size - 1) / chunk_size;
     let mut offset = 0;
     let mut chunk_index = 0;

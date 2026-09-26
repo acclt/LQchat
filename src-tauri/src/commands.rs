@@ -58,52 +58,9 @@ pub struct TrayMenuItems {
 
 #[cfg(feature = "desktop")]
 
-/// 根据设备内存和文件大小计算最优分块大小
+/// 每次确认一个 10 MB 分块后更新文件进度。
 fn calculate_optimal_chunk_size(_file_size: usize) -> usize {
-    #[cfg(feature = "desktop")]
-    {
-        use sysinfo::System;
-
-        let mut sys = System::new_all();
-        sys.refresh_all();
-
-        // 获取可用内存（字节）
-        let available_memory = sys.available_memory() as usize * 1024; // sysinfo 返回的是 KB
-
-        // 使用可用内存的 80%（大胆使用内存以获得更快的速度）
-        let max_chunk_memory = available_memory * 80 / 100;
-
-        // 动态计算分块大小：使用可用内存的 80%，但最小 50MB，最大 500MB
-        let chunk_size = std::cmp::max(
-            50 * 1024 * 1024, // 最小 50MB
-            std::cmp::min(
-                max_chunk_memory,  // 使用可用内存的 80%
-                500 * 1024 * 1024, // 最大 500MB
-            ),
-        );
-
-        println!(
-            "[Command] 系统可用内存: {} MB",
-            available_memory / (1024 * 1024)
-        );
-        println!(
-            "[Command] 内存预算: {} MB",
-            max_chunk_memory / (1024 * 1024)
-        );
-        println!(
-            "[Command] 计算的分块大小: {} MB",
-            chunk_size / (1024 * 1024)
-        );
-
-        chunk_size
-    }
-
-    #[cfg(not(feature = "desktop"))]
-    {
-        // Web 端：使用保守的固定值
-        println!("[Command] Web 端使用固定分块大小: 100 MB");
-        100 * 1024 * 1024
-    }
+    crate::network::messaging::FILE_TRANSFER_CHUNK_SIZE
 }
 
 /// 统一的文件上传实现
@@ -111,7 +68,7 @@ fn calculate_optimal_chunk_size(_file_size: usize) -> usize {
 async fn upload_file_internal<R: tokio::io::AsyncRead + Unpin>(
     app: &tauri::AppHandle,
     state: &State<'_, DbState>,
-    peer_state: Option<&State<'_, PeerState>>,
+    _peer_state: Option<&State<'_, PeerState>>,
     peer_id: String,
     peer_addr: String,
     file_name: String,
@@ -175,38 +132,7 @@ async fn upload_file_internal<R: tokio::io::AsyncRead + Unpin>(
     // 获取自己的 ID（发送者 ID）
     let my_id = crate::db::get_user_id(&state.pool).await?;
 
-    // 获取接收方的可用内存
-    let receiver_memory_mb = if let Some(ps) = peer_state {
-        let peers = ps.active_manager().get_all_peers();
-        peers
-            .iter()
-            .find(|p| {
-                p.addr
-                    .starts_with(&peer_addr.split(':').next().unwrap_or(""))
-            })
-            .map(|p| p.available_memory_mb)
-            .unwrap_or(1024)
-    } else {
-        1024
-    };
-
-    println!("[Command] 接收方可用内存: {} MB", receiver_memory_mb);
-
-    // 分块上传
-    let chunk_size = calculate_optimal_chunk_size(file_size);
-
-    // 根据接收方内存调整分块大小（取发送方和接收方的最小值）
-    let max_chunk_for_receiver = std::cmp::max(
-        50 * 1024 * 1024,
-        receiver_memory_mb as usize * 1024 * 1024 / 4,
-    );
-    let adjusted_chunk_size = std::cmp::min(chunk_size, max_chunk_for_receiver);
-
-    println!(
-        "[Command] 原始分块大小: {} MB, 调整后: {} MB",
-        chunk_size / (1024 * 1024),
-        adjusted_chunk_size / (1024 * 1024)
-    );
+    let adjusted_chunk_size = calculate_optimal_chunk_size(file_size);
 
     let total_chunks = (file_size + adjusted_chunk_size - 1) / adjusted_chunk_size;
 

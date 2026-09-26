@@ -5,6 +5,11 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'js', 'ui.js'), 'utf8');
 const helpers = source.slice(source.indexOf('function fileTransferLabel('), source.indexOf('function createMessageElement('));
+const apiSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'js', 'api.js'), 'utf8');
+const chunkHelper = apiSource.slice(apiSource.indexOf('function calculateOptimalChunkSize('), apiSource.indexOf('async function apiSendFile('));
+const chunkSize = vm.runInNewContext(`${chunkHelper}\ncalculateOptimalChunkSize(4 * 1024 ** 3)`);
+assert.equal(chunkSize, 10 * 1024 * 1024, 'large files use 10 MiB chunks');
+assert.equal(Math.ceil((4 * 1024 ** 3) / chunkSize), 410, '4 GiB files report progress across 410 confirmations');
 
 function card(direction, id, total, file = true) {
   const status = { textContent: '', className: '' };

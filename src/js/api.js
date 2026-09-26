@@ -327,61 +327,9 @@ async function apiGetChatHistory(peerId, limit = 10, offset = 0) {
 }
 
 // 发送文件
-// 获取设备可用内存（估算）
-function getAvailableMemory() {
-  if (navigator.deviceMemory) {
-    // 使用 Device Memory API（如果可用）
-    return navigator.deviceMemory * 1024 * 1024 * 1024; // 转换为字节
-  }
-  // 默认估算：假设设备有 2GB 内存
-  return 2 * 1024 * 1024 * 1024;
-}
-
-// 根据设备内存和文件大小计算最优分块大小
-function calculateOptimalChunkSize(fileSize) {
-  const availableMemory = getAvailableMemory();
-  // 使用可用内存的 80%（大胆使用内存以获得更快的速度）
-  const maxChunkMemory = availableMemory * 0.8;
-
-  // 根据文件大小选择分块策略，基础大小调大
-  let baseChunkSize;
-  if (fileSize < 100 * 1024 * 1024) {
-    // < 100MB：100MB 分块
-    baseChunkSize = 100 * 1024 * 1024;
-  } else if (fileSize < 500 * 1024 * 1024) {
-    // 100-500MB：200MB 分块
-    baseChunkSize = 200 * 1024 * 1024;
-  } else if (fileSize < 1024 * 1024 * 1024) {
-    // 500MB-1GB：300MB 分块
-    baseChunkSize = 300 * 1024 * 1024;
-  } else if (fileSize < 5 * 1024 * 1024 * 1024) {
-    // 1-5GB：400MB 分块
-    baseChunkSize = 400 * 1024 * 1024;
-  } else {
-    // > 5GB：500MB 分块
-    baseChunkSize = 500 * 1024 * 1024;
-  }
-
-  // 根据可用内存调整分块大小（不超过可用内存的 80%）
-  const chunkSize = Math.min(baseChunkSize, Math.floor(maxChunkMemory));
-
-  console.log(
-    "[JS-API] 设备内存:",
-    Math.round(availableMemory / (1024 * 1024 * 1024)),
-    "GB",
-  );
-  console.log(
-    "[JS-API] 可用内存预算:",
-    Math.round(maxChunkMemory / (1024 * 1024)),
-    "MB",
-  );
-  console.log(
-    "[JS-API] 计算的分块大小:",
-    Math.round(chunkSize / (1024 * 1024)),
-    "MB",
-  );
-
-  return chunkSize;
+// 每段收到确认后才更新进度，和原生发送路径保持一致。
+function calculateOptimalChunkSize(_fileSize) {
+  return 10 * 1024 * 1024;
 }
 
 async function apiSendFile(peerId, peerAddr, file, filePath) {

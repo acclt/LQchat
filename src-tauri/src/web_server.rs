@@ -574,7 +574,7 @@ async fn upload_to_receiver(
     let peer_addr = _receiver_addr.to_string();
 
     // 分块上传到接收端
-    let chunk_size = std::cmp::min(file_size.max(50 * 1024 * 1024), 100 * 1024 * 1024);
+    let chunk_size = crate::network::messaging::FILE_TRANSFER_CHUNK_SIZE;
     let total_chunks = (file_size + chunk_size - 1) / chunk_size;
 
     let mut reader = tokio::io::BufReader::new(file);
