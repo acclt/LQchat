@@ -681,6 +681,36 @@ h2::before {
 	visibility: hidden;
 }
 
+.file-transfer-progress {
+	width: 100%;
+	min-width: 0;
+	margin-top: 5px;
+}
+.file-transfer-progress[hidden] { display: none; }
+.file-transfer-bar {
+	height: 6px;
+	border-radius: 999px;
+	background: rgba(143, 92, 229, .18);
+	overflow: hidden;
+}
+.file-transfer-fill {
+	height: 100%;
+	width: 0;
+	border-radius: inherit;
+	background: #9b70e7;
+	transition: width .16s ease;
+}
+.file-transfer-detail {
+	margin-top: 5px;
+	font-size: 11px;
+	line-height: 1.35;
+	white-space: normal;
+	overflow-wrap: anywhere;
+	opacity: .82;
+}
+.message.sent .file-transfer-bar { background: rgba(255, 255, 255, .26); }
+.message.sent .file-transfer-fill { background: #fff; }
+
 /* 统一添加一个小圆点，增加精致感 */
 .file-finish::before,
 .file-downloading::before,

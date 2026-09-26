@@ -661,9 +661,16 @@ async function handleStartUpload(data) {
   const upload = window.__pendingUploads?.[data.sender_msg_id];
   if (!upload) {
     console.error("[JS-App] start_upload: 找不到待上传文件，msg_id=", data.sender_msg_id);
+    updateFileTransferById(data.sender_msg_id, "failed", 0, data.file_size, 0, true);
+    fetch("/api/mark_upload_complete", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ msg_id: data.sender_msg_id, status: "failed" }),
+    }).catch(console.warn);
     return;
   }
   console.log("[JS-App] 开始上传:", upload.fileName, "->", data.receiver_addr);
+  // 手动请求意味着本次从零重传。
+  updateFileTransferById(data.sender_msg_id, "retrying", 0, upload.fileSize, 0, true);
   // 先更新 UI 为上传中状态
   const chatMessages = document.getElementById("chat-messages");
   let msgEl = chatMessages?.querySelector(`[data-sender-msg-id="${data.sender_msg_id}"]`);
@@ -717,6 +724,7 @@ async function handleStartUpload(data) {
         const respData = await resp.json();
         if (respData.status === "already_exists") {
           console.log("[JS-App] ✓ 秒传命中");
+          updateFileTransferById(data.sender_msg_id, "sent", fileSize, fileSize, 0, true);
           // 标记本地记录为 accepted
           fetch("/api/mark_upload_complete", {
             method: "POST",
@@ -740,6 +748,8 @@ async function handleStartUpload(data) {
 
       offset += size;
       chunkIndex++;
+      updateFileTransferById(data.sender_msg_id, "uploading", offset, fileSize,
+        offset / Math.max(0.001, (Date.now() - startTime) / 1000) / (1024 * 1024));
 
       // 每秒更新一次速度
       const now = Date.now();
@@ -747,13 +757,6 @@ async function handleStartUpload(data) {
         const elapsed = (now - startTime) / 1000;
         const speed = offset / (1024 * 1024) / elapsed;
         console.log("[JS-App] 手动上传: ", Math.round(offset / 1024 / 1024), "MB, 速度:", Math.round(speed), "MB/s");
-        const msgId = data.sender_msg_id;
-        const chatMessages = document.getElementById("chat-messages");
-        const msgEl = chatMessages?.querySelector(`[data-sender-msg-id="${msgId}"]`);
-        const statusDiv = msgEl?.querySelector(".file-uploading");
-        if (statusDiv) {
-          statusDiv.textContent = Math.round(speed) + " MB/s";
-        }
         lastLogTime = now;
       }
     }
@@ -762,27 +765,20 @@ async function handleStartUpload(data) {
     delete window.__pendingUploads[data.sender_msg_id];
     // 更新 DB 状态为 sent（使刷新后不再显示上传中）
     try {
-      await fetch("/api/update_upload_status", {
+      await fetch("/api/mark_upload_complete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ file_name: fileName, status: "sent" }),
+        body: JSON.stringify({ msg_id: data.sender_msg_id, status: "sent" }),
       });
     } catch (_) {}
-    // 更新 UI 状态（发送端自己的消息用 data-msg-id，对方的消息用 data-sender-msg-id）
-    const chatMessages = document.getElementById("chat-messages");
-    let msgEl = chatMessages?.querySelector(`[data-sender-msg-id="${data.sender_msg_id}"]`);
-    if (!msgEl) {
-      msgEl = chatMessages?.querySelector(`[data-msg-id="${data.sender_msg_id}"]`);
-    }
-    if (msgEl) {
-      const statusDiv = msgEl.querySelector(".file-uploading, .file-pending");
-      if (statusDiv) {
-        statusDiv.className = "";
-        statusDiv.textContent = "";
-      }
-    }
+    updateFileTransferById(data.sender_msg_id, "sent", fileSize, fileSize, 0, true);
   } catch (e) {
     console.error("[JS-App] 上传失败:", e.message);
+    fetch("/api/mark_upload_complete", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ msg_id: data.sender_msg_id, status: "failed" }),
+    }).catch(console.warn);
+    updateFileTransferById(data.sender_msg_id, "failed", 0, upload.fileSize, 0, true);
   }
 }
 

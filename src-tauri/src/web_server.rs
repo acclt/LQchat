@@ -448,7 +448,7 @@ async fn start_send_http(
                     let upload_notice = serde_json::json!({
                         "msg_type": "file_status_update",
                         "sender_msg_id": payload.sender_msg_id,
-                        "file_status": "uploading",
+                        "file_status": "retrying",
                     });
                     let _ = state.ws_broadcast.send(upload_notice.to_string());
                     state.event_bus.publish_message(upload_notice);
@@ -498,7 +498,7 @@ async fn start_send_http(
             let upload_notice = serde_json::json!({
                 "msg_type": "file_status_update",
                 "sender_msg_id": payload.sender_msg_id,
-                "file_status": "uploading",
+                "file_status": "retrying",
             });
             let _ = state.ws_broadcast.send(upload_notice.to_string());
             state.event_bus.publish_message(upload_notice);
@@ -515,7 +515,7 @@ async fn start_send_http(
             let ws_tx = state.ws_broadcast.clone();
             let event_bus = state.event_bus.clone();
             tokio::spawn(async move {
-                upload_to_receiver(
+                let completed = upload_to_receiver(
                     &pool,
                     &receiver_addr,
                     &fname,
@@ -527,12 +527,12 @@ async fn start_send_http(
                 )
                 .await;
                 // 上传完成 → 更新发送端 DB 状态
-                let _ = crate::db::update_file_status_by_id(&pool, sm_id, "sent").await;
+                let _ = crate::db::update_file_status_by_id(&pool, sm_id, if completed { "sent" } else { "failed" }).await;
                 // 通知发送端前端更新 UI
                 let update = serde_json::json!({
                     "msg_type": "file_status_update",
                     "sender_msg_id": sm_id,
-                    "file_status": "sent",
+                    "file_status": if completed { "sent" } else { "failed" },
                 });
                 let _ = ws_tx.send(update.to_string());
                 event_bus.publish_message(update);
@@ -565,7 +565,7 @@ async fn upload_to_receiver(
     file: tokio::fs::File,
     _sender_msg_id: i64,
     event_bus: CoreEventBus,
-) {
+) -> bool {
     // 获取自己的 ID
     let my_id = crate::db::get_user_id(_pool).await.unwrap_or_default();
 
@@ -585,7 +585,7 @@ async fn upload_to_receiver(
         Ok(client) => client,
         Err(error) => {
             eprintln!("[WebServer] 无法创建局域网 HTTP 客户端: {error}");
-            return;
+            return false;
         }
     };
     let upload_url = format!("http://{}/api/upload", peer_addr);
@@ -597,7 +597,10 @@ async fn upload_to_receiver(
             let n = match tokio::io::AsyncReadExt::read(&mut reader, &mut buf[bytes_read..]).await {
                 Ok(0) => break,
                 Ok(n) => n,
-                Err(_) => break,
+                Err(error) => {
+                    eprintln!("[WebServer] 读取文件失败: {error}");
+                    return false;
+                }
             };
             bytes_read += n;
             if n == 0 {
@@ -635,9 +638,16 @@ async fn upload_to_receiver(
                     .unwrap(),
             );
 
-        if let Ok(resp) = client.post(&upload_url).multipart(form).send().await {
-            if resp.status().is_success() {
+        match client.post(&upload_url).multipart(form).send().await {
+            Ok(resp) if resp.status().is_success() => {
                 println!("[WebServer] ✓ 分块 {}/{}", chunk_index + 1, total_chunks);
+            }
+            result => {
+                eprintln!("[WebServer] 上传分块失败: {:?}", result.err());
+                event_bus.publish(crate::core_events::CoreEvent::FileTransferProgress(
+                    serde_json::json!({"sender_msg_id": _sender_msg_id, "transfer_status": "failed", "transferred": offset, "total": file_size}),
+                ));
+                return false;
             }
         }
         offset += bytes_read;
@@ -652,12 +662,19 @@ async fn upload_to_receiver(
                     "file_name": _file_name,
                     "speed_mb_s": speed,
                     "sender_msg_id": _sender_msg_id,
+                    "transferred": offset,
+                    "total": file_size,
                 }),
             ));
         }
     }
 
+    if offset != file_size {
+        eprintln!("[WebServer] 文件未完整发送: {offset}/{file_size}");
+        return false;
+    }
     println!("[WebServer] ✓ 文件上传完成: {}", file_name);
+    true
 }
 
 // ── 接收端通过本地服务器发送 file_request（POST /api/request_file） ──
@@ -1165,13 +1182,13 @@ async fn handle_websocket(socket: WebSocket, state: Arc<AppState>) {
                                     let _ = crate::db::update_file_status_by_id(
                                         &state.pool,
                                         sender_msg_id,
-                                        "uploading",
+                                        "retrying",
                                     )
                                     .await;
                                     let update = serde_json::json!({
                                         "msg_type": "file_status_update",
                                         "sender_msg_id": sender_msg_id,
-                                        "file_status": "uploading",
+                                        "file_status": "retrying",
                                     });
                                     let _ = state.ws_broadcast.send(update.to_string());
                                     state.event_bus.publish_message(update);
@@ -1204,7 +1221,7 @@ async fn handle_websocket(socket: WebSocket, state: Arc<AppState>) {
                                                     let event_bus = state.event_bus.clone();
                                                     let fname2 = fname.clone();
                                                     tokio::spawn(async move {
-                                                        upload_to_receiver(
+                                                        let completed = upload_to_receiver(
                                                             &pool,
                                                             &raddr,
                                                             &fname2,
@@ -1219,13 +1236,13 @@ async fn handle_websocket(socket: WebSocket, state: Arc<AppState>) {
                                                             crate::db::update_file_status_by_id(
                                                                 &pool,
                                                                 sender_msg_id,
-                                                                "sent",
+                                                                if completed { "sent" } else { "failed" },
                                                             )
                                                             .await;
                                                         let update = serde_json::json!({
                                                             "msg_type": "file_status_update",
                                                             "sender_msg_id": sender_msg_id,
-                                                            "file_status": "sent",
+                                                            "file_status": if completed { "sent" } else { "failed" },
                                                         });
                                                         let _ = ws_tx.send(update.to_string());
                                                         event_bus.publish_message(update);
@@ -1277,7 +1294,7 @@ async fn handle_websocket(socket: WebSocket, state: Arc<AppState>) {
                                                     let event_bus = state.event_bus.clone();
                                                     let fname2 = cached_name;
                                                     tokio::spawn(async move {
-                                                        upload_to_receiver(
+                                                        let completed = upload_to_receiver(
                                                             &pool,
                                                             &raddr,
                                                             &fname2,
@@ -1292,13 +1309,13 @@ async fn handle_websocket(socket: WebSocket, state: Arc<AppState>) {
                                                             crate::db::update_file_status_by_id(
                                                                 &pool,
                                                                 sender_msg_id,
-                                                                "sent",
+                                                                if completed { "sent" } else { "failed" },
                                                             )
                                                             .await;
                                                         let update = serde_json::json!({
                                                             "msg_type": "file_status_update",
                                                             "sender_msg_id": sender_msg_id,
-                                                            "file_status": "sent",
+                                                            "file_status": if completed { "sent" } else { "failed" },
                                                         });
                                                         let _ = ws_tx.send(update.to_string());
                                                         event_bus.publish_message(update);
@@ -1355,7 +1372,7 @@ async fn handle_websocket(socket: WebSocket, state: Arc<AppState>) {
                                                 let event_bus = state.event_bus.clone();
                                                 let fname2 = fname.clone();
                                                 tokio::spawn(async move {
-                                                    upload_to_receiver(
+                                                    let completed = upload_to_receiver(
                                                         &pool,
                                                         &raddr,
                                                         &fname2,
@@ -1370,14 +1387,14 @@ async fn handle_websocket(socket: WebSocket, state: Arc<AppState>) {
                                                     let _ = crate::db::update_file_status_by_id(
                                                         &pool,
                                                         sender_msg_id,
-                                                        "sent",
+                                                        if completed { "sent" } else { "failed" },
                                                     )
                                                     .await;
                                                     // 通知发送端前端更新 UI
                                                     let update = serde_json::json!({
                                                         "msg_type": "file_status_update",
                                                         "sender_msg_id": sender_msg_id,
-                                                        "file_status": "sent",
+                                                        "file_status": if completed { "sent" } else { "failed" },
                                                     });
                                                     let _ = ws_tx.send(update.to_string());
                                                     event_bus.publish_message(update);
@@ -1505,11 +1522,23 @@ async fn save_message_to_db(
     .await
 }
 
+async fn notify_receive_failure(state: &AppState, sender_id: &str, sender_msg_id: &str) {
+    if sender_msg_id.is_empty() { return; }
+    let _ = crate::db::mark_received_file_failed(&state.pool, sender_id, sender_msg_id).await;
+    let event = serde_json::json!({
+        "msg_type": "file_status_update", "sender_msg_id": sender_msg_id,
+        "file_status": "failed", "direction": "received",
+    });
+    let _ = state.ws_broadcast.send(event.to_string());
+    state.event_bus.publish_message(event);
+}
+
 async fn upload_file_http(
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
     println!("[Web Server] 收到文件上传请求");
+    let request_started = std::time::Instant::now();
 
     let mut sender_id = String::new();
     let mut file_name = String::new();
@@ -1924,6 +1953,7 @@ async fn upload_file_http(
         Ok(f) => f,
         Err(e) => {
             eprintln!("[Web Server] ✗ 打开临时文件失败: {}", e);
+            notify_receive_failure(&state, &sender_id, &sender_msg_id).await;
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
@@ -1938,6 +1968,7 @@ async fn upload_file_http(
 
     if let Err(e) = tokio::io::AsyncWriteExt::write_all(&mut writer, &chunk_data).await {
         eprintln!("[Web Server] ✗ 写入文件失败: {}", e);
+        notify_receive_failure(&state, &sender_id, &sender_msg_id).await;
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
@@ -1949,6 +1980,9 @@ async fn upload_file_http(
 
     if let Err(e) = tokio::io::AsyncWriteExt::flush(&mut writer).await {
         eprintln!("[Web Server] ✗ 刷新缓冲区失败: {}", e);
+        notify_receive_failure(&state, &sender_id, &sender_msg_id).await;
+        return (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: format!("刷新文件失败: {}", e) })).into_response();
     }
 
     println!(
@@ -2035,13 +2069,22 @@ async fn upload_file_http(
         }
     }
 
-    // 广播发送端速度给前端（用 sender_msg_id 查找 DOM 元素，无需查 DB）
+    // 元数据确认写入后才公布累计进度；每次重传第一块都会截断临时文件。
+    let written_size = tokio::fs::metadata(&temp_path)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
+    // 广播接收端累计写入量。
     if !sender_msg_id.is_empty() {
+        // 包含 multipart 接收和落盘耗时；首块也能显示实际吞吐。
+        let chunk_speed_mb_s = chunk_data.len() as f64
+            / (1024.0 * 1024.0)
+            / request_started.elapsed().as_secs_f64().max(0.001);
         let progress_msg = serde_json::json!({
             "msg_type": "file_download_progress",
             "sender_msg_id": sender_msg_id,
-            "speed_mb_s": speed_mb_s,
-            "received": chunk_data.len(),
+            "speed_mb_s": if chunk_speed_mb_s.is_finite() { chunk_speed_mb_s } else { speed_mb_s },
+            "received": written_size,
             "total": file_size,
         });
         let _ = state.ws_broadcast.send(progress_msg.to_string());
@@ -2049,10 +2092,7 @@ async fn upload_file_http(
     }
 
     // 检查是否是最后一块
-    let temp_size = tokio::fs::metadata(&temp_path)
-        .await
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let temp_size = written_size;
 
     if temp_size >= file_size && file_size > 0 {
         // 最后一块写完：将临时文件重命名为最终文件（原子操作，绕过 Android 覆盖限制）
@@ -2130,11 +2170,19 @@ async fn upload_file_http(
                             crate::core_events::CoreEvent::FileTransferCompleted(full_msg),
                         );
                     }
-                    Err(e) => eprintln!("[Web Server] ✗ 更新文件状态失败: {}", e),
+                    Err(e) => {
+                        eprintln!("[Web Server] ✗ 更新文件状态失败: {}", e);
+                        notify_receive_failure(&state, &sender_id, &sender_msg_id).await;
+                        return (StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ErrorResponse { error: format!("更新文件状态失败: {}", e) })).into_response();
+                    },
                 }
             }
             Err(e) => {
                 eprintln!("[Web Server] ✗ 重命名临时文件失败: {}", e);
+                notify_receive_failure(&state, &sender_id, &sender_msg_id).await;
+                return (StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse { error: format!("保存文件失败: {}", e) })).into_response();
             }
         }
     }

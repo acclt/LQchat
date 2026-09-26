@@ -1472,6 +1472,15 @@ pub async fn update_file_status_by_sender_msg_id(
     Ok(())
 }
 
+pub async fn mark_received_file_failed(
+    pool: &sqlx::Pool<sqlx::Sqlite>, sender_id: &str, sender_msg_id: &str,
+) -> Result<(), String> {
+    sqlx::query("UPDATE messages SET file_status = 'failed' WHERE msg_type = 'file' AND sender_id = ? AND sender_msg_id = ?")
+        .bind(sender_id).bind(sender_msg_id).execute(pool).await
+        .map_err(|e| format!("更新接收文件状态失败: {e}"))?;
+    Ok(())
+}
+
 /// 通过 sender_msg_id 查询发送端的文件记录（file_path 等）
 pub async fn get_sender_file_by_msg_id(
     pool: &sqlx::Pool<sqlx::Sqlite>,

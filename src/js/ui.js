@@ -1605,6 +1605,71 @@ function initScrollListener() {
 }
 
 // 创建消息元素
+function fileTransferLabel(status, isSent) {
+  const labels = {
+    pending: "等待设备", offering: "等待接收", offered: "等待接收",
+    uploading: "正在发送", downloading: "正在接收", saving: "正在保存",
+    sent: "已发送", accepted: isSent ? "已发送" : "已完成",
+    received: "已完成", completed: "已完成", invalid: "接收失败",
+    save_failed: "保存失败", failed: isSent ? "发送失败" : "接收失败",
+    retrying: "重新发送",
+  };
+  return labels[status] || (isSent ? "已发送" : "已完成");
+}
+
+function formatTransferBytes(bytes) {
+  const value = Math.max(0, Number(bytes) || 0);
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function renderFileTransfer(msgEl, status, transferred, total, speedMbS = 0, force = false) {
+  if (!msgEl?.querySelector(".message-file")) return;
+  const statusEl = msgEl.querySelector(".file-transfer-status");
+  const progress = msgEl.querySelector(".file-transfer-progress");
+  if (!statusEl || !progress) return;
+  const isSent = msgEl.classList.contains("sent");
+  const size = Math.max(0, Number(total ?? progress.dataset.total) || 0);
+  const bytes = Math.min(size || Number.MAX_SAFE_INTEGER, Math.max(0, Number(transferred) || 0));
+  const percent = size ? Math.min(100, Math.floor(bytes * 100 / size)) : 0;
+  const now = performance.now();
+  if (!force && status === progress.dataset.status && now - Number(progress.dataset.updated || 0) < 150 && percent === Number(progress.dataset.percent || 0)) return;
+  progress.dataset.updated = String(now);
+  progress.dataset.percent = String(percent);
+  progress.dataset.status = status;
+  progress.dataset.total = String(size);
+  statusEl.textContent = fileTransferLabel(status, isSent);
+  statusEl.className = "file-transfer-status";
+  const active = ["uploading", "downloading", "saving", "retrying"].includes(status);
+  progress.hidden = !active;
+  progress.querySelector(".file-transfer-fill").style.width = `${percent}%`;
+  progress.querySelector(".file-transfer-bar").setAttribute("aria-valuenow", String(percent));
+  const speed = Math.max(0, Number(speedMbS) || 0);
+  const detail = progress.querySelector(".file-transfer-detail");
+  detail.textContent = `${percent}% · ${formatTransferBytes(bytes)} / ${formatTransferBytes(size)}` +
+    (speed > 0 && status !== "saving" ? ` · ${formatTransferBytes(speed * 1024 * 1024)}/s` : "");
+}
+
+function updateFileTransferById(senderMsgId, status, transferred, total, speedMbS = 0, force = false, direction = "sent") {
+  if (senderMsgId === undefined || senderMsgId === null) return;
+  const chat = document.getElementById("chat-messages");
+  const id = String(senderMsgId);
+  const msgEl = [...(chat?.querySelectorAll(".message[data-sender-msg-id], .message[data-msg-id]") || [])]
+    .find(el => el.classList.contains(direction) &&
+      (el.dataset.senderMsgId === id || (direction === "sent" && el.dataset.msgId === id)));
+  if (!msgEl && direction === "sent") {
+    if (!window.__pendingFileProgress) window.__pendingFileProgress = new Map();
+    window.__pendingFileProgress.set(id, { status, transferred, total, speedMbS });
+    return;
+  }
+  renderFileTransfer(msgEl, status, transferred, total, speedMbS, force);
+  if (direction === "sent" && ["sent", "accepted", "failed"].includes(status)) {
+    window.__pendingFileProgress?.delete(id);
+  }
+}
+
 function createMessageElement(message, isSent) {
   const messageDiv = document.createElement("div");
   messageDiv.className = `message ${isSent ? "sent" : "received"}`;
@@ -1638,6 +1703,7 @@ function createMessageElement(message, isSent) {
       "accepted",
       "offering",
       "uploading",
+      "retrying",
       "pending",
       "save_failed",
     ].includes(message.file_status);
@@ -1775,12 +1841,7 @@ function createMessageElement(message, isSent) {
           console.error("[UI] 无法请求文件: 缺少 sender_msg_id");
           return;
         }
-        // 立即切换为下载中状态，记录开始时间用于速度计算
-        const statusEl = contentDiv.querySelector(".file-transfer-status");
-        if (statusEl) {
-          statusEl.className = "file-transfer-status file-downloading";
-          statusEl.textContent = "0 MB/s";
-        }
+        renderFileTransfer(messageDiv, "downloading", 0, message.file_size, 0, true);
         console.log("[手动下载] 请求文件: msg_id=", senderMsgId, "from=", fromId, "addr=", senderAddr);
         try {
           const tauri = window.__TAURI__;
@@ -1801,10 +1862,12 @@ function createMessageElement(message, isSent) {
             if (!resp.ok) {
               const data = await resp.json().catch(() => ({}));
               console.error("[UI] 请求文件失败:", data.error || resp.status);
+              renderFileTransfer(messageDiv, "failed", 0, message.file_size, 0, true);
             }
           }
         } catch (e) {
           console.error("[UI] 请求文件失败:", e.message);
+          renderFileTransfer(messageDiv, "failed", 0, message.file_size, 0, true);
         }
       });
     } else if (hasLocalFile) {
@@ -2048,9 +2111,15 @@ function createMessageElement(message, isSent) {
     });
   }
 
-  // ---- 统一处理纯净版的状态展示 ----
+  // 每个文件消息持有独立进度；历史记录只持久化终态，传输字节由实时事件补齐。
   const statusDiv = document.createElement("div");
   statusDiv.className = "file-transfer-status";
+  if (message.msg_type === "file") {
+    const progress = document.createElement("div");
+    progress.className = "file-transfer-progress";
+    progress.innerHTML = '<div class="file-transfer-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"><div class="file-transfer-fill"></div></div><div class="file-transfer-detail"></div>';
+    contentDiv.append(statusDiv, progress);
+  }
 
   // 优先级 1: 只要数据库中 status 是 pending,一律展示待上线
   if (message.status === "pending") {
@@ -2081,7 +2150,7 @@ function createMessageElement(message, isSent) {
     // 成功状态(sent/accepted/accepted)不再塞入任何多余的文本,保持极简
   }
 
-  if (message.msg_type === "file" || statusDiv.classList.length > 1) {
+  if (message.msg_type !== "file" && statusDiv.classList.length > 1) {
     contentDiv.appendChild(statusDiv);
   }
 
@@ -2145,6 +2214,19 @@ function createMessageElement(message, isSent) {
     }
   }
 
+  if (message.msg_type === "file") {
+    const initialStatus = ["failed", "retrying"].includes(message.file_status) ? message.file_status :
+      (message.status === "pending" ? "pending" : (message.file_status || "accepted"));
+    renderFileTransfer(messageDiv, initialStatus, 0, message.file_size, 0, true);
+    const pending = isSent && window.__pendingFileProgress?.get(String(message.id));
+    if (pending && ["uploading", "retrying"].includes(initialStatus)) {
+      renderFileTransfer(messageDiv, pending.status, pending.transferred, pending.total,
+        pending.speedMbS, true);
+    }
+    if (isSent && ["sent", "accepted", "failed"].includes(initialStatus)) {
+      window.__pendingFileProgress?.delete(String(message.id));
+    }
+  }
   return messageDiv;
 }
 
@@ -2158,89 +2240,22 @@ function onReceiveMessage(message) {
   if (message.msg_type === "file_status_update") {
     const senderMsgId = message.sender_msg_id;
     const newStatus = message.file_status;
-    if (senderMsgId) {
-      const chatMessages = document.getElementById("chat-messages");
-      const msgEl = chatMessages?.querySelector(`[data-sender-msg-id="${senderMsgId}"]`);
-      if (msgEl) {
-        const statusDiv = msgEl.querySelector(".file-transfer-status");
-        if (newStatus === "invalid") {
-          if (statusDiv) {
-            statusDiv.className = "file-transfer-status file-pending";
-            statusDiv.textContent = t("file_invalid");
-            statusDiv.dataset.fileStatus = "invalid";
-          }
-        } else if (newStatus === "sent") {
-          // 发送完成 → 清空所有状态类
-          if (statusDiv) {
-            statusDiv.className = "file-transfer-status";
-            statusDiv.textContent = "";
-            delete statusDiv.dataset.fileStatus;
-          }
-        } else if (newStatus === "downloading") {
-          if (statusDiv) {
-            statusDiv.className = "file-transfer-status file-downloading";
-            statusDiv.textContent = "0 MB/s";
-          }
-        } else if (newStatus === "offering") {
-          if (statusDiv) {
-            statusDiv.className = "file-transfer-status file-pending";
-            statusDiv.textContent = t("file_offering");
-            statusDiv.dataset.fileStatus = "offering";
-          }
-        } else if (newStatus === "uploading") {
-          if (statusDiv) {
-            statusDiv.className = "file-transfer-status file-uploading";
-            statusDiv.textContent = "0 MB/s";
-          }
-        } else if (newStatus === "accepted") {
-          if (statusDiv) {
-            statusDiv.className = "file-transfer-status";
-            statusDiv.textContent = "";
-          }
-        }
-      }
-    }
+    updateFileTransferById(senderMsgId, newStatus, 0, message.total, 0, true,
+      message.direction === "received" || ["invalid", "downloading"].includes(newStatus) ? "received" : "sent");
     return;
   }
 
   // ── file_download_progress：直接展示发送端传来的速度 ──
   if (message.msg_type === "file_download_progress") {
     const senderMsgId = message.sender_msg_id;
-    if (senderMsgId && message.speed_mb_s !== undefined) {
-      const chatMessages = document.getElementById("chat-messages");
-      const msgEl = chatMessages?.querySelector(`[data-sender-msg-id="${senderMsgId}"]`);
-      if (!msgEl) return;
-      const statusDiv = msgEl.querySelector(".file-downloading, .file-uploading");
-      if (statusDiv) {
-        const speedMbps = parseFloat(message.speed_mb_s);
-        statusDiv.textContent = speedMbps >= 1
-          ? Math.round(speedMbps) + " MB/s"
-          : (speedMbps * 1000).toFixed(0) + " KB/s";
-        // 下载完成 → 清空状态文字（通过 received >= total 判断）
-        if (message.received >= message.total) {
-          statusDiv.className = "file-transfer-status";
-          statusDiv.textContent = "";
-        }
-      }
-    }
+    updateFileTransferById(senderMsgId, message.received >= message.total ? "saving" : "downloading",
+      message.received, message.total, message.speed_mb_s, false, "received");
     return;
   }
 
   // ── start_upload：桌面端接收到对方请求发送文件，直接上传（由 Rust handler 处理，此处仅 UI 反馈） ──
   if (message.msg_type === "start_upload") {
-    // 更新 UI 状态为上传中
-    const chatMessages = document.getElementById("chat-messages");
-    let msgEl = chatMessages?.querySelector(`[data-sender-msg-id="${message.sender_msg_id}"]`);
-    if (!msgEl) {
-      msgEl = chatMessages?.querySelector(`[data-msg-id="${message.sender_msg_id}"]`);
-    }
-    if (msgEl) {
-      const statusDiv = msgEl.querySelector(".file-transfer-status");
-      if (statusDiv) {
-        statusDiv.textContent = "0 MB/s";
-        statusDiv.className = "file-transfer-status file-uploading";
-      }
-    }
+    updateFileTransferById(message.sender_msg_id, "retrying", 0, message.file_size, 0, true);
     return;
   }
 
@@ -3998,15 +4013,9 @@ function initDragAndDrop(chatContainer) {
 
     // 持久监听上传进度（覆盖 file_request 手动下载场景）
     tauri.event.listen("upload_progress", (event) => {
-      const speed = event.payload.speed_mb_s;
-      const senderMsgId = event.payload.sender_msg_id;
-      if (!senderMsgId) return;
-      const chatMessages = document.getElementById("chat-messages");
-      const msgEl = chatMessages?.querySelector(`[data-sender-msg-id="${senderMsgId}"]`);
-      const statusDiv = msgEl?.querySelector(".file-uploading");
-      if (statusDiv) {
-        statusDiv.textContent = Math.round(speed) + " MB/s";
-      }
+      const p = event.payload;
+      updateFileTransferById(p.sender_msg_id, p.transfer_status === "failed" ? "failed" : "uploading",
+        p.transferred, p.total, p.speed_mb_s);
     });
   } else {
     // Web 端:使用传统的 HTML5 拖拽 API(需要读取文件内容)

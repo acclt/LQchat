@@ -474,6 +474,8 @@ async fn resend_file_background(
     file_name: &str,
     file_path: &str,
     file_size: i64,
+    msg_id: i64,
+    event_bus: &CoreEventBus,
 ) -> Result<(), String> {
     println!("[Messaging] 正在后台补发文件: {}", file_name);
 
@@ -512,13 +514,15 @@ async fn resend_file_background(
     let total_chunks = (file_size + chunk_size - 1) / chunk_size;
     let mut offset = 0;
     let mut chunk_index = 0;
+    let start_time = std::time::Instant::now();
 
     loop {
         let mut buf = vec![0u8; chunk_size as usize];
         let mut bytes_read = 0;
         while bytes_read < chunk_size as usize {
             use tokio::io::AsyncReadExt;
-            let n = file.read(&mut buf[bytes_read..]).await.unwrap_or(0);
+            let n = file.read(&mut buf[bytes_read..]).await
+                .map_err(|e| format!("读取补发文件失败: {e}"))?;
             if n == 0 {
                 break;
             }
@@ -535,6 +539,10 @@ async fn resend_file_background(
             .text("file_size", file_size.to_string())
             .text("chunk_index", chunk_index.to_string())
             .text("chunk_total", total_chunks.to_string())
+            .text("sender_msg_id", msg_id.to_string())
+            .text("speed_mb_s", if offset > 0 {
+                format!("{:.1}", offset as f64 / (1024.0 * 1024.0) / start_time.elapsed().as_secs_f64().max(0.001))
+            } else { "0".to_string() })
             .part(
                 "chunk",
                 reqwest::multipart::Part::bytes(buf)
@@ -554,6 +562,11 @@ async fn resend_file_background(
 
         offset += bytes_read as i64;
         chunk_index += 1;
+        let elapsed = start_time.elapsed().as_secs_f64().max(0.001);
+        event_bus.publish(CoreEvent::FileTransferProgress(serde_json::json!({
+            "sender_msg_id": msg_id, "transferred": offset, "total": file_size,
+            "speed_mb_s": offset as f64 / (1024.0 * 1024.0) / elapsed,
+        })));
         if chunk_index % 5 == 0 {
             println!(
                 "[Messaging] 文件 {} 补发中: {}/{} MB",
@@ -562,6 +575,9 @@ async fn resend_file_background(
                 file_size / (1024 * 1024)
             );
         }
+    }
+    if offset != file_size {
+        return Err(format!("文件未完整补发: {offset}/{file_size}"));
     }
     Ok(())
 }
@@ -636,17 +652,32 @@ pub async fn resend_pending_messages(
 
                             if auto_enabled {
                                 // 自动下载开启 → 直接上传（原行为）
+                                let _ = crate::db::update_file_status_by_id(pool, msg_id, "retrying").await;
+                                event_bus.publish_message(serde_json::json!({
+                                    "msg_type": "file_status_update", "sender_msg_id": msg_id,
+                                    "file_status": "retrying", "total": size,
+                                }));
                                 match resend_file_background(
-                                    &my_id, peer_addr, &content, path, size,
+                                    &my_id, peer_addr, &content, path, size, msg_id, &event_bus,
                                 )
                                 .await
                                 {
                                     Ok(_) => {
                                         println!("[UDP] ✓ 文件消息 {} 补发成功", msg_id);
+                                        let _ = crate::db::update_file_status_by_id(pool, msg_id, "sent").await;
+                                        event_bus.publish_message(serde_json::json!({
+                                            "msg_type": "file_status_update", "sender_msg_id": msg_id,
+                                            "file_status": "sent",
+                                        }));
                                         msg_ids_to_mark.push(msg_id);
                                     }
                                     Err(e) => {
                                         eprintln!("[UDP] ✗ 文件消息 {} 补发失败: {}", msg_id, e);
+                                        let _ = crate::db::update_file_status_by_id(pool, msg_id, "failed").await;
+                                        event_bus.publish_message(serde_json::json!({
+                                            "msg_type": "file_status_update", "sender_msg_id": msg_id,
+                                            "file_status": "failed",
+                                        }));
                                     }
                                 }
                             } else {

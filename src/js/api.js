@@ -424,18 +424,19 @@ async function apiSendFile(peerId, peerAddr, file, filePath) {
 
       // 监听后端传来的进度事件
       let unlistenProgress;
+      let unlistenStarted;
       if (tauri.event) {
+        unlistenStarted = await tauri.event.listen("file_upload_started", (event) => {
+          if (event.payload.peer_id !== peerId) return;
+          const target = captureChatTarget();
+          if (target?.peer.id === peerId) refreshCapturedChat(target).catch(console.error);
+        });
         unlistenProgress = await tauri.event.listen(
           "upload_progress",
           (event) => {
-            const speed = event.payload.speed_mb_s;
-            const senderMsgId = event.payload.sender_msg_id;
-            if (!senderMsgId) return;
-            const msgEl = document.querySelector(`[data-sender-msg-id="${senderMsgId}"]`);
-            const statusDiv = msgEl?.querySelector(".file-uploading");
-            if (statusDiv) {
-              statusDiv.textContent = Math.round(speed) + " MB/s";
-            }
+            const p = event.payload;
+            updateFileTransferById(p.sender_msg_id, p.transfer_status === "failed" ? "failed" : "uploading",
+              p.transferred, p.total, p.speed_mb_s);
           },
         );
       }
@@ -455,6 +456,7 @@ async function apiSendFile(peerId, peerAddr, file, filePath) {
         if (unlistenProgress) {
           unlistenProgress();
         }
+        if (unlistenStarted) unlistenStarted();
       }
     } catch (e) {
       console.error("[JS-API] 文件发送失败:", e);
@@ -589,6 +591,7 @@ async function apiSendFile(peerId, peerAddr, file, filePath) {
           const respData = await resp.json();
           if (respData.status === "already_exists") {
             console.log("[JS-API] ✓ 秒传命中，接收端已有完整文件，停止上传");
+            updateFileTransferById(msgId, "sent", fileSize, fileSize, 0, true);
             // 标记发送端本地记录为 accepted（await 确保 loadChatHistory 前已更新）
             await fetch("/api/mark_upload_complete", {
               method: "POST",
@@ -606,6 +609,8 @@ async function apiSendFile(peerId, peerAddr, file, filePath) {
 
         offset += size;
         chunkIndex++;
+        updateFileTransferById(msgId, "uploading", offset, fileSize,
+          offset / Math.max(0.001, (Date.now() - startTime) / 1000) / (1024 * 1024));
 
         // 每秒打印一次进度并更新 UI
         const now = Date.now();
@@ -619,14 +624,6 @@ async function apiSendFile(peerId, peerAddr, file, filePath) {
             Math.round(speed),
             "MB/s",
           );
-
-          // 更新 UI 中的速度显示
-          const msgId = createData.msg_id;
-          const msgEl = document.querySelector(`[data-sender-msg-id="${msgId}"]`);
-          const statusDiv = msgEl?.querySelector(".file-uploading");
-          if (statusDiv) {
-            statusDiv.textContent = Math.round(speed) + " MB/s";
-          }
 
           lastLogTime = now;
         }
@@ -646,16 +643,16 @@ async function apiSendFile(peerId, peerAddr, file, filePath) {
 
       // 更新发送端记录状态为 sent
       if (createData && createData.success) {
-        await fetch("/api/update_upload_status", {
+        await fetch("/api/mark_upload_complete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            file_name: fileName,
-            timestamp: Math.floor(Date.now() / 1000),
+            msg_id: msgId,
             status: "sent",
           }),
         });
       }
+      updateFileTransferById(msgId, "sent", fileSize, fileSize, 0, true);
 
       return {
         success: true,
@@ -664,6 +661,11 @@ async function apiSendFile(peerId, peerAddr, file, filePath) {
       };
     } catch (e) {
       console.error("[JS-API] 文件上传失败:", e);
+      fetch("/api/mark_upload_complete", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ msg_id: msgId, status: "failed" }),
+      }).catch(console.warn);
+      updateFileTransferById(msgId, "failed", 0, fileSize, 0, true);
       throw new Error("上传失败: " + getErrorMessage(e));
     }
   }

@@ -149,6 +149,12 @@ async fn upload_file_internal<R: tokio::io::AsyncRead + Unpin>(
         .ok()
     };
 
+    if let Some(id) = message_id {
+        let _ = app.emit("file_upload_started", serde_json::json!({
+            "sender_msg_id": id, "peer_id": peer_id,
+        }));
+    }
+
     // 统一修正 fd: 路径为 fd:{msg_id}（媒体服务器按 msg_id 查 FD 缓存）
     if let Some(mid) = message_id {
         if file_path_for_db.starts_with("fd:") {
@@ -223,9 +229,19 @@ async fn upload_file_internal<R: tokio::io::AsyncRead + Unpin>(
         let mut bytes_read = 0;
 
         while bytes_read < adjusted_chunk_size {
-            let n = tokio::io::AsyncReadExt::read(&mut file, &mut buf[bytes_read..])
-                .await
-                .map_err(|e| format!("读取文件失败: {}", e))?;
+            let n = match tokio::io::AsyncReadExt::read(&mut file, &mut buf[bytes_read..]).await {
+                Ok(n) => n,
+                Err(e) => {
+                    if let Some(id) = message_id {
+                        let _ = crate::db::update_file_status_by_id(&state.pool, id, "failed").await;
+                    }
+                    let _ = app.emit("upload_progress", serde_json::json!({
+                        "sender_msg_id": message_id, "transfer_status": "failed",
+                        "transferred": offset, "total": file_size,
+                    }));
+                    return Err(format!("读取文件失败: {}", e));
+                }
+            };
 
             if n == 0 {
                 break;
@@ -287,9 +303,13 @@ async fn upload_file_internal<R: tokio::io::AsyncRead + Unpin>(
                 if let Some(id) = message_id {
                     let pool = state.pool.clone();
                     tokio::spawn(async move {
-                        let _ = crate::db::delete_message_by_id(&pool, id).await;
+                        let _ = crate::db::update_file_status_by_id(&pool, id, "failed").await;
                     });
                 }
+                let _ = app.emit("upload_progress", serde_json::json!({
+                    "sender_msg_id": message_id, "transfer_status": "failed",
+                    "transferred": offset, "total": file_size,
+                }));
                 format!("上传分块失败: {}", e)
             })?;
 
@@ -301,8 +321,12 @@ async fn upload_file_internal<R: tokio::io::AsyncRead + Unpin>(
             eprintln!("[Command] ✗ 上传分块失败: {}", error_text);
 
             if let Some(id) = message_id {
-                let _ = crate::db::delete_message_by_id(&state.pool, id).await;
+                let _ = crate::db::update_file_status_by_id(&state.pool, id, "failed").await;
             }
+            let _ = app.emit("upload_progress", serde_json::json!({
+                "sender_msg_id": message_id, "transfer_status": "failed",
+                "transferred": offset, "total": file_size,
+            }));
 
             return Err(format!("上传分块失败: {}", error_text));
         }
@@ -345,11 +369,23 @@ async fn upload_file_internal<R: tokio::io::AsyncRead + Unpin>(
                     "file_name": file_name.clone(),
                     "speed_mb_s": speed,
                     "sender_msg_id": message_id,
+                    "transferred": offset,
+                    "total": file_size,
                 }),
             );
         }
     }
 
+    if offset != file_size {
+        if let Some(id) = message_id {
+            let _ = crate::db::update_file_status_by_id(&state.pool, id, "failed").await;
+        }
+        let _ = app.emit("upload_progress", serde_json::json!({
+            "sender_msg_id": message_id, "transfer_status": "failed",
+            "transferred": offset, "total": file_size,
+        }));
+        return Err(format!("文件未完整发送: {offset}/{file_size}"));
+    }
     let total_time = start_time.elapsed().as_secs_f64();
     let avg_speed = file_size as f64 / (1024.0 * 1024.0) / total_time;
     println!(
