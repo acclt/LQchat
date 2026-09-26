@@ -1,48 +1,42 @@
 
 # LQChat
 
-> 一个跨平台的、无需注册的、支持文件传输的局域网聊天软件。
+> 面向 Windows 与 Android 的局域网消息、文件传输和 Android 通知转发工具。无需账号，不依赖云端。
 >
-> 🌐 [English Documentation](README.md)
+> 🌐 [English Documentation](README.md) · [下载 v11.3](https://github.com/acclt/LQchat/releases/latest)
 
-<img width="1923" height="2104" alt="image" src="https://github.com/user-attachments/assets/454c170a-272a-4997-b096-569fc7c4dc53" />
+<p align="center">
+  <img src="artifacts/0.2/device/windows-build1022-wide.jpg" width="68%" alt="LQChat Windows 界面" />
+  <img src="artifacts/0.2/device/home-build1022.png" width="27%" alt="LQChat Android 界面" />
+</p>
 
-## 本仓库版本
+## 当前版本：v11.3
 
-本仓库基于 [cap153 的上游项目](https://github.com/cap153/LANChat) 继续开发，重点增强 Windows 与 Android 的日常使用体验：
+本仓库基于 [cap153/LANChat](https://github.com/cap153/LANChat) 继续开发，目前重点是 Windows 与 Android 之间可靠、常驻的局域网互联：
 
-- Android 聊天页采用双层输入栏，并提供内嵌半屏相册。
-- Android 支持多选图片、文件和已安装 App；App 选择网格同步显示图标与应用名称。
-- 图片、文件和 App 使用统一发送队列，支持继续添加、移除、失败重试及离线补发。
-- Windows 与 Android 均支持后台系统通知和通知点击返回聊天。
-- Windows 支持关闭到托盘与开机静默自启。
-- Windows 首页与 Android 统一为浅色紫色视觉，同时保留桌面聊天布局。
+- 在可信局域网设备之间发送文字、图片、文件和 Android 安装包。
+- Android 可把选定应用的通知转发给一台或多台 LQChat 设备；Windows 可接收并保存转发通知，但当前不采集 Windows 自身通知。
+- Android 常驻通知显示“正在转发/正在接收”，设备接入或断开局域网转发链路时按设备名称提醒。
+- Android 提供前台服务、后台保活、开机自启、最近任务行为、通知权限和电池策略设置。
+- Windows 与 Android 收到消息或文件时使用同一个内置提示音，由一个“通知音效”开关控制。
+- Windows 为便携版，支持关闭到托盘、Windows 登录自启，以及同时控制自启和双击启动的“启动时自动缩小到托盘”开关。
+- 支持局域网自动重连、离线消息/文件补发，以及跨 VLAN、WireGuard 的手动 IP/主机名发现。
 
-源码仓库不提交本地构建产物。请按下方步骤自行构建，或前往 [Releases](https://github.com/acclt/LQchat/releases) 获取发布版本。
+可直接使用的 Windows x64 便携包和 Android ARM64 正式 APK 请前往 [Releases](https://github.com/acclt/LQchat/releases/latest) 下载。
 
-## 特性
+## 主要功能
 
-- 🚀 **无需注册** - 自动生成随机用户名，点击用户名即可修改
-- 💻 **跨平台支持** - Linux 桌面端、Windows 桌面端、Android App、Web 端
-- 🔍 **自动发现** - 基于 UDP 广播/组播的局域网设备自动发现
-- 🔗 **手动发现** - 支持 IP 地址、域名、主机名，跨 VLAN / WireGuard 也能互通
-- 🔄 **智能回复** - 收到心跳自动回复，只需一方手动添加即可双向发现
-- 💬 **实时聊天** - 支持文本消息、流式消息和文件传输
-- 📁 **文件传输** - 支持大文件分块传输，可设置自动接收
-- 📸 **图片预览** - 图片消息自动预览
-- 💾 **历史记录** - SQLite 数据库保存聊天记录
-- 🔧 **端口配置** - 可在设置中自定义服务端口，支持 CLI 参数覆盖
-- 📂 **数据库路径** - 支持自定义数据库存储位置，配置文件持久化
-- 🌐 **Web 端** - 可部署到无图形界面服务器
-- 🔔 **系统通知** - Linux 桌面端、Windows 桌面端、Android App、Web 端均支持
-- 💡 **托盘图标闪烁** - 点击后跳转最新未读，右键菜单开/关通知
-- 🌍 **中英文界面** - 自动检测系统语言，支持手动切换，托盘菜单即时热更新
-- 🤖 **[LANClaw](https://github.com/cap153/LANClaw) 智能机器人** - 由 Pi 驱动的 AI 聊天机器人，支持自动回复、文件分析和定时任务
-- 📱 **Android 双轨文件引擎** — SAF 持久化权限 + Share Intent FD 缓存零拷贝双轨并行
-- 📁 **SAF 文件选择器** — Android 原生 `ACTION_OPEN_DOCUMENT`，选中的文件跨进程/跨重启持久可读
-- 📥 **Android 自定义下载目录** — 通过系统文件夹选择器授权目标目录，接收完成后安全导出
-- 🔁 **离线补发** — 离线消息自动缓存，上线后自动补发，支持文件消息
-- 🔗 **手动接收** - 关闭 **自动下载** 后，手动点击未下载文件即可下载
+- 🚀 **无需注册** — 首次运行自动创建本地身份，可随时修改设备名称。
+- 🔍 **设备发现** — UDP 广播/组播自动发现，并支持 IP、域名、主机名和自定义端口。
+- 💬 **聊天与传输** — 文字、图片、文件、大文件分块、手动接收、图片预览和 SQLite 历史记录。
+- 🔁 **断线恢复** — 离线队列、自动补发、设备上线/离线判定及连接状态提醒。
+- 🔔 **Android 通知转发** — 可选择来源应用和目标设备，在 Windows 或另一台 Android 设备接收。
+- 🛡️ **Android 后台运行** — 常驻前台通知、后台保活、开机启动及厂商电池策略指引。
+- 🔊 **通知音效** — Windows 与 Android 共用内置提示音和统一开关。
+- 💡 **Windows 托盘** — 原图标闪烁、点击打开、关闭到托盘、开机自启和启动自动缩小。
+- 📱 **Android 文件能力** — SAF 持久权限、系统文件选择、分享入口、应用选择及自定义下载目录。
+- 🌐 **其他运行方式** — 保留上游架构中的 Linux 桌面端和轻量 Web 服务。
+- 🌍 **中英文界面** — 自动检测系统语言，也可手动切换。
 
 ## 快速开始
 
@@ -71,9 +65,8 @@ cargo tauri build --bundles rpm
 cargo tauri android build --target aarch64
 ./sign-apk.sh
 
-# windows桌面端
-cd src-tauri
-cargo xwin build --release --bin LQChat --target x86_64-pc-windows-msvc
+# Windows x64 便携包（在 Windows PowerShell 中运行）
+.\Build-Windows-Portable.ps1
 
 # Web 端（精简版，无 GUI 依赖）
 cd src-tauri
@@ -165,15 +158,19 @@ LQChat-Portable\
 {
   "db_path": null,
   "port": 8888,
-  "lang": "zh"
+  "lang": "zh",
+  "close_to_tray": true,
+  "start_minimized": true
 }
 ```
 
-| 字段      | 说明                                      |
-|-----------|-------------------------------------------|
-| `db_path` | [数据库路径](数据库路径)（`null` = 默认） |
-| `port`    | 监听端口：默认 8888                       |
-| `lang`    | 界面语言：`zh`（中文）、`en`（英文）
+| 字段 | 说明 |
+|---|---|
+| `db_path` | [数据库路径](#数据库路径)，`null` 表示默认路径 |
+| `port` | 监听端口，默认 8888 |
+| `lang` | 界面语言：`zh`（中文）、`en`（英文） |
+| `close_to_tray` | 点击 Windows 主窗口关闭按钮时隐藏到托盘 |
+| `start_minimized` | Windows 登录自启和双击启动时均直接进入托盘 |
 
 ## 数据库路径
 
@@ -229,9 +226,16 @@ LQChat-Portable\
 - [x] 新建会话命令（`/new`）
 - [x] 手动发现 IP / 域名 / 主机名（跨 VLAN / WireGuard）
 - [x] UDP 心跳自动回复（跨端口/跨网段自动发现）
-- [x] 系统通知（桌面: Windows PowerShell / Linux notify-send，Web: Notification API，Android: 原生通知）
-- [x] 托盘图标闪烁（未读消息时闪烁提示，点击后跳转最新未读）
+- [x] Windows 与 Android 原生系统通知，并保留 Web/Linux 通知能力
+- [x] Android 通知转发，可选择来源应用和一台或多台目标设备
+- [x] 常驻通知显示转发/接收链路状态，并按设备名称提醒接入与断开
+- [x] 通知接收历史、来源设备及投递状态记录
+- [x] Android 前台服务后台运行、开机自启、最近任务策略及覆盖更新恢复
+- [x] Windows/Android 统一通知音效开关与内置提示音
+- [x] 托盘原图标闪烁（未读消息时闪烁提示，点击后跳转最新未读）
 - [x] 通知开关（托盘右键菜单，仅桌面端）
+- [x] Windows 关闭到托盘、登录自启及“启动时自动缩小”设置
+- [x] Windows 便携数据、配置、下载和 WebView 缓存目录
 - [x] 手动接收文件
 - [x] Android SAF 持久化权限 + 零拷贝 FD 缓存双轨机制
 - [x] Android SAF 原生文件选择器（`ACTION_OPEN_DOCUMENT` + `takePersistableUriPermission`）
@@ -242,7 +246,6 @@ LQChat-Portable\
 ### 🚧 进行中
 
 - [ ] 聊天室功能
-- [ ] 更换默认图标
 
 ## 项目结构
 
@@ -316,11 +319,11 @@ desktop文件加上`Exec=env __NV_DISABLE_EXPLICIT_SYNC=1 lanchat`环境变量
 
 ## Android 后台接收
 
-Android 版在用户显式打开 LQChat 后启动同进程前台服务，并在通知栏显示独立的常驻状态通知。按 Home、切换应用、锁屏或普通 Activity 重建不会重复启动网络核心；从最近任务划掉 LQChat 则视为主动退出，会停止服务并释放 UDP/HTTP 端口和系统锁。
+Android 版通过前台服务和常驻通知让局域网核心在界面退到后台后继续运行。常驻通知会显示本机正在转发、正在接收、等待目标设备或局域网链路断开等状态。
 
-设置页可查看后台接收、通知权限和电池优化状态，也可进入系统电池设置或执行“停止后台接收并退出”。系统杀进程、手机重启、用户强制停止以及划掉任务后都不会自动恢复；再次显式打开 App 才开始新的运行会话。
+设置页可分别控制“后台运行”“开机自启”和“从最近任务隐藏”，并显示通知权限、电池优化状态和厂商电源策略入口；“停止后台接收并退出”会明确停止服务。覆盖安装后可按已保存设置恢复后台服务，但 Android 的“强制停止”始终具有最高优先级，应用不会绕过系统限制自行启动。
 
-Android 深度 Doze 和部分厂商 ROM 仍可能延迟局域网通信。需要更可靠的息屏接收时，请把 LQChat 的电池策略设为“不受限制”。组播发现和已知 IP 直连是两条不同链路，应分别验证。
+iQOO/vivo、红魔、小米、华为等厂商系统的深度休眠策略仍可能延迟或终止局域网通信。需要可靠息屏接收时，请允许应用自启动和后台活动，并把电池策略设为“不受限制”。组播发现和已知 IP 直连是两条不同链路，应分别验证。
 
 ## 技术栈
 

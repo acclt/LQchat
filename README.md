@@ -1,48 +1,42 @@
 
 # LQChat
 
-> A cross-platform, no-registration LAN chat app with file transfer support.
+> Private LAN messaging, file transfer, and Android notification relay for Windows and Android. No account or cloud service required.
 >
-> 📖 [中文文档](README_CN.md)
+> 📖 [中文说明](README_CN.md) · [Download v11.3](https://github.com/acclt/LQchat/releases/latest)
 
-<img width="1923" height="2104" alt="LQChat screenshot" src="https://github.com/user-attachments/assets/454c170a-272a-4997-b096-569fc7c4dc53" />
+<p align="center">
+  <img src="artifacts/0.2/device/windows-build1022-wide.jpg" width="68%" alt="LQChat Windows interface" />
+  <img src="artifacts/0.2/device/home-build1022.png" width="27%" alt="LQChat Android interface" />
+</p>
 
-## About This Version
+## Current Release: v11.3
 
-This repository continues the work of [cap153's upstream project](https://github.com/cap153/LANChat), with a focus on the everyday Windows and Android experience:
+This fork continues [cap153/LANChat](https://github.com/cap153/LANChat) and is now centered on reliable Windows–Android use:
 
-- A redesigned Android chat composer with an in-chat half-screen gallery.
-- Multi-select images, files, and installed apps on Android; app tiles show both the icon and app name.
-- A unified attachment queue with continue-adding, removal, retry, and offline re-send support.
-- Background system notifications on Windows and Android, with notification-to-chat navigation.
-- Close-to-tray and silent launch at Windows sign-in.
-- A shared light purple visual style across Windows and Android while retaining the desktop chat layout.
+- Send text, images, files, and Android app packages between trusted devices on the same LAN.
+- Forward selected Android app notifications to one or more LQChat devices. Windows receives and stores the forwarded notifications; Windows notification capture is not included.
+- Show persistent forwarding/receiving state on Android and notify when a named device joins or leaves the LAN route.
+- Keep Android receiving in the background with foreground-service, boot-start, recent-task, notification-permission, and battery-policy controls.
+- Play one built-in notification sound for incoming messages and files on Windows and Android, controlled by a single switch.
+- Run Windows as a portable app with close-to-tray, Windows sign-in autostart, and a **Start minimized to tray** option that also controls double-click launches.
+- Automatically rediscover LAN peers, retry queued offline messages/files after reconnect, and support manual IP/hostname discovery across VLAN or WireGuard links.
 
-Local build artifacts are not committed to the source repository. Build from source using the instructions below, or obtain packaged versions from [Releases](https://github.com/acclt/LQchat/releases).
+The ready-to-use Windows x64 portable archive and Android ARM64 APK are available on the [Releases page](https://github.com/acclt/LQchat/releases/latest).
 
 ## Features
 
-- 🚀 **No Registration** - Auto-generates random usernames; click to change anytime
-- 💻 **Cross-Platform** - Linux desktop, Windows desktop, Android App, Web
-- 🔍 **Auto Discovery** - UDP broadcast/multicast based LAN device discovery
-- 🔗 **Manual Discovery** - Add by IP, domain, or hostname; works across VLANs / WireGuard
-- 🔄 **Smart Reply** - Auto-replies to heartbeats; only one side needs to add the other for mutual discovery
-- 💬 **Real-time Chat** - Text messages, streaming messages, and file transfer
-- 📁 **File Transfer** - Large file chunked transfer with configurable auto-accept
-- 📸 **Image Preview** - Automatic preview for image messages
-- 💾 **History** - SQLite database for chat history
-- 🔧 **Port Config** - Customizable service port in settings, overridable via CLI
-- 📂 **Database Path** - Custom database location, persisted in config file
-- 🌐 **Web Client** - Deployable on headless servers
-- 🔔 **System Notifications** - Linux desktop, Windows desktop, Android App, Web
-- 💡 **Tray Icon Flash** - Click to jump to latest unread; right-click menu to toggle notifications
-- 🌍 **i18n** - Automatic system language detection, manual switch, tray menu hot-reload
-- 🤖 **[LANClaw](https://github.com/cap153/LANClaw) AI Bot** - Pi-powered AI chatbot with auto-reply, file analysis, and scheduled tasks
-- 📱 **Android Dual-Track File Engine** — SAF persistable permissions + Share Intent FD cache zero-copy dual track
-- 📁 **SAF File Picker** — Android native `ACTION_OPEN_DOCUMENT`; selected files remain readable across process/reboot
-- 📥 **Android Custom Download Folder** — Pick a writable system folder and safely export completed transfers
-- 🔁 **Offline Re-send** — Offline messages auto-cached; auto-re-send on reconnect, including files
-- 🔗 **Manual Receive** - Turn off **Auto Download** and click to download files manually
+- 🚀 **No registration** — Local identity is generated on first launch and can be renamed.
+- 🔍 **LAN discovery** — UDP broadcast/multicast discovery plus manual IP, hostname, domain, and custom-port peers.
+- 💬 **Messaging and transfer** — Text, images, files, large chunked transfers, manual receive, previews, and SQLite history.
+- 🔁 **Reconnect handling** — Offline queue, automatic re-send, peer join/leave detection, and connection notifications.
+- 🔔 **Android notification relay** — Select source apps and target devices; receive forwarded notifications on Windows or Android.
+- 🛡️ **Android background operation** — Persistent foreground notification, background keep-alive, boot startup, and vendor battery-policy guidance.
+- 🔊 **Notification sound** — One bundled sound and one switch for received messages/files on both supported primary platforms.
+- 💡 **Windows tray integration** — Original-icon flashing for unread events, click-to-open, close-to-tray, autostart, and start-minimized control.
+- 📱 **Android file integration** — SAF persistent permissions, native picker, share intents, app selection, and custom download folders.
+- 🌐 **Additional targets** — Linux desktop and a lightweight Web service remain available from the upstream architecture.
+- 🌍 **Chinese and English UI** — Automatic language detection and manual switching.
 
 ## Quick Start
 
@@ -71,9 +65,8 @@ cargo tauri build --bundles rpm
 cargo tauri android build --target aarch64
 ./sign-apk.sh
 
-# Windows desktop
-cd src-tauri
-cargo xwin build --release --bin LQChat --target x86_64-pc-windows-msvc
+# Windows x64 portable package (run in PowerShell on Windows)
+.\Build-Windows-Portable.ps1
 
 # Web (lightweight, no GUI dependencies)
 cd src-tauri
@@ -165,15 +158,19 @@ Example content:
 {
   "db_path": null,
   "port": 8888,
-  "lang": "en"
+  "lang": "en",
+  "close_to_tray": true,
+  "start_minimized": true
 }
 ```
 
-| Field     | Description                                       |
-|-----------|---------------------------------------------------|
-| `db_path` | [Database path](#database); `null` = default      |
-| `port`    | Listening port, default 8888                      |
-| `lang`    | Interface language: `zh` (Chinese), `en` (English) |
+| Field | Description |
+|---|---|
+| `db_path` | [Database path](#database); `null` = default |
+| `port` | Listening port, default 8888 |
+| `lang` | Interface language: `zh` (Chinese), `en` (English) |
+| `close_to_tray` | Hide the Windows window when its close button is clicked |
+| `start_minimized` | Start directly in the Windows tray for both sign-in autostart and double-click launches |
 
 ## Database
 
@@ -229,9 +226,16 @@ The database path can be changed in settings (requires restart). On Windows port
 - [x] New session command (`/new`)
 - [x] Manual discovery (IP / domain / hostname, cross-VLAN / WireGuard)
 - [x] UDP heartbeat auto-reply (cross-port / cross-subnet auto discovery)
-- [x] System notifications (desktop: PowerShell / notify-send, Web: Notification API, Android: native)
-- [x] Tray icon flash (unread notification, click to jump to latest)
+- [x] Native system notifications on Windows and Android, plus Web/Linux notification support
+- [x] Android notification relay with selectable source apps and target devices
+- [x] Forwarding/receiving route status and named peer join/leave notifications
+- [x] Notification receive history with source and delivery status
+- [x] Android foreground-service background mode, boot startup, recent-task policy, and post-update recovery
+- [x] Shared Windows/Android notification sound setting with bundled audio
+- [x] Tray original-icon flash (unread notification, click to jump to latest)
 - [x] Notification toggle (tray right-click menu, desktop only)
+- [x] Windows close-to-tray, sign-in autostart, and start-minimized setting
+- [x] Windows portable data/config/download/WebView layout
 - [x] Manual file receive
 - [x] Android SAF persistable permissions + zero-copy FD cache dual-track
 - [x] Android SAF native file picker (`ACTION_OPEN_DOCUMENT` + `takePersistableUriPermission`)
@@ -242,7 +246,6 @@ The database path can be changed in settings (requires restart). On Windows port
 ### 🚧 In Progress
 
 - [ ] Group chat
-- [ ] Better default icon
 
 ## Project Structure
 
@@ -317,11 +320,11 @@ When devices are on different VLANs or connected via WireGuard, UDP broadcast wo
 
 ## Android Background Receiving
 
-After the user explicitly opens LQChat, the Android app starts an in-process foreground service with its own persistent status notification. Pressing Home, switching apps, locking the screen, or a normal Activity recreation does not create a second network core. Swiping LQChat from Recents is treated as an explicit exit and releases the service, UDP/HTTP ports, notifications, and system locks.
+Android uses a foreground service and a persistent notification to keep the LAN core alive when the UI is in the background. The notification reports whether this device is forwarding notifications, receiving them, waiting for a peer, or has lost its LAN route.
 
-The Settings panel shows the background-receive, notification-permission, and battery-optimization states. It also links to Android battery settings and provides “Stop background receiving and exit.” The app does not auto-recover after process death, device reboot, force-stop, or a Recents swipe; opening the app explicitly starts a new session.
+The Settings panel independently controls background keep-alive, boot startup, and removal from Recents. It also reports notification permission and battery-optimization state, links to the vendor battery page, and provides an explicit **Stop background receiving and exit** action. Package updates can restore an enabled background session; Android force-stop always remains authoritative.
 
-Deep Doze and vendor-specific battery policies can still delay LAN traffic. For higher screen-off reliability, set LQChat to unrestricted battery use. Multicast discovery and direct communication with a known IP are separate paths and should be tested independently.
+Deep Doze and vendor policies from iQOO/vivo, RedMagic, Xiaomi, Huawei, and similar devices can still delay or kill LAN traffic. Allow autostart, set battery use to unrestricted, and permit background activity when reliable screen-off receiving is required. Multicast discovery and direct communication with a known IP are separate paths and should be tested independently.
 
 ## Tech Stack
 
