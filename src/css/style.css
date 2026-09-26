@@ -1143,19 +1143,11 @@ body.android-app .android-attachment-panel.open {
 .android-app-gallery-item.selected { outline: none; }
 .android-app-icon { position: relative; display: block; width: 64px; max-width: 100%; aspect-ratio: 1; overflow: hidden; border-radius: 14px; background: #e7e8ef; }
 .android-app-icon img,
-.android-app-icon .android-queue-preview { width: 100%; height: 100%; border-radius: inherit; }
+.android-app-icon .android-gallery-placeholder { width: 100%; height: 100%; border-radius: inherit; }
 .android-app-gallery-item.selected .android-app-icon { outline: 3px solid var(--android-purple); outline-offset: -3px; }
 .android-app-name { display: block; width: 100%; overflow: hidden; color: var(--android-ink); font-size: 11px; line-height: 16px; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
 
-.android-queue { display: flex; flex-direction: column; gap: 8px; }
-.android-queue-item { display: grid; grid-template-columns: 44px 1fr auto; align-items: center; gap: 11px; padding: 10px; border-radius: 13px; background: #f5f5f9; }
-.android-queue-preview { width: 44px; height: 44px; border-radius: 10px; object-fit: cover; display: grid; place-items: center; background: #e7e4f0; color: var(--android-purple); font-size: 18px; }
-.android-queue-copy { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.android-queue-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.android-queue-copy small { color: var(--android-muted); font-size: 11px; }
-.android-queue-remove { border: 0; background: transparent; color: #9ca3af; font-size: 20px; }
-.android-queue-actions { display: flex; align-items: center; gap: 4px; }
-.android-queue-retry { border: 0; border-radius: 8px; padding: 6px 8px; background: #ece6f8; color: var(--android-purple); }
+.android-gallery-placeholder { width: 44px; height: 44px; border-radius: 10px; object-fit: cover; display: grid; place-items: center; background: #e7e4f0; color: var(--android-purple); font-size: 18px; }
 
 .android-empty-state { display: grid; place-items: center; min-height: 170px; color: var(--android-muted); text-align: center; }
 .android-image-preview { position: fixed; inset: 0; z-index: 5000; display: grid; place-items: center; background: rgba(10,10,14,.94); padding: 24px; }

@@ -474,8 +474,8 @@ function initChat() {
   sendBtn.addEventListener("click", () => {
     if (window.selectMode && window.selectMode.active) {
       deleteSelectedMessages();
-    } else if (isAndroidApp() && ["image", "file", "app"].some((kind) => androidAttachmentState.selected[kind].size > 0)) {
-      sendAndroidAttachmentQueue();
+    } else if (isAndroidApp() && androidAttachmentState.selected[androidAttachmentState.kind].size > 0) {
+      sendAndroidSelectedAttachments();
     } else {
       sendMessage();
     }
@@ -588,7 +588,6 @@ function initChat() {
 
 const androidAttachmentState = {
   kind: "image",
-  mode: "picker",
   images: [],
   apps: [],
   album: "全部图片",
@@ -639,14 +638,6 @@ function normalizeAndroidAttachment(item, kind) {
   };
 }
 
-function mergeAndroidAttachments(kind, items) {
-  const selected = androidAttachmentState.selected[kind];
-  for (const raw of items || []) {
-    const item = normalizeAndroidAttachment(raw, kind);
-    if (item.uri && !selected.has(item.uri)) selected.set(item.uri, item);
-  }
-}
-
 function setAndroidAttachmentPanel(open) {
   const panel = document.getElementById("android-attachment-panel");
   const wasOpen = panel?.classList.contains("open");
@@ -660,8 +651,7 @@ function updateAndroidAttachmentMeta() {
   const kind = androidAttachmentState.kind;
   const labels = { image: "图片", file: "文件", app: "App" };
   const count = androidAttachmentState.selected[kind].size;
-  document.getElementById("android-attachment-title").textContent =
-    androidAttachmentState.mode === "queue" ? `${labels[kind]}队列` : labels[kind];
+  document.getElementById("android-attachment-title").textContent = labels[kind];
   document.getElementById("android-attachment-count").textContent = `已选 ${count} 项`;
   const send = document.getElementById("android-send-attachments");
   send.textContent = `发送 (${count})`;
@@ -683,51 +673,6 @@ function renderAndroidAttachmentPanel() {
   const kind = androidAttachmentState.kind;
   const selected = androidAttachmentState.selected[kind];
   updateAndroidAttachmentMeta();
-
-  if (androidAttachmentState.mode === "queue" || kind === "file") {
-    body.innerHTML = `<div class="android-queue"></div>`;
-    const queue = body.firstElementChild;
-    for (const item of selected.values()) {
-      const row = document.createElement("div");
-      row.className = "android-queue-item";
-      const preview = item.thumbnail
-        ? `<img class="android-queue-preview" src="${item.thumbnail}" alt="">`
-        : `<span class="android-queue-preview">${kind === "app" ? "A" : kind === "image" ? "▧" : "▤"}</span>`;
-      const detail = kind === "app" ? (item.packageName || item.label || "APK") : `${(item.name.split(".").pop() || "文件").toUpperCase()} · ${formatFileSize(item.size)}`;
-      const statusText = { ready: detail, sending: "发送中…", sent: "已发送", error: `发送失败`, pending: "等待设备上线后自动发送" }[item.status] || detail;
-      row.innerHTML = `${preview}<span class="android-queue-copy"><strong></strong><small></small></span><span class="android-queue-actions"></span>`;
-      row.querySelector("strong").textContent = item.name;
-      row.querySelector("small").textContent = statusText;
-      const actions = row.querySelector(".android-queue-actions");
-      if (item.status === "error") {
-        const retry = document.createElement("button");
-        retry.type = "button";
-        retry.className = "android-queue-retry";
-        retry.textContent = "重试";
-        retry.addEventListener("click", () => {
-          item.status = "ready";
-          sendAndroidAttachmentQueue();
-        });
-        actions.appendChild(retry);
-      }
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "android-queue-remove";
-      remove.setAttribute("aria-label", "移除");
-      remove.textContent = "×";
-      remove.addEventListener("click", () => {
-        if (item.msgId && item.status === "pending") {
-          apiDeleteMessages([item.msgId]).catch((e) => console.error("[UI] 取消离线附件失败:", e));
-        }
-        selected.delete(item.uri);
-        renderAndroidAttachmentPanel();
-      });
-      actions.appendChild(remove);
-      queue.appendChild(row);
-    }
-    if (!selected.size) body.innerHTML = `<div class="android-empty-state">尚未添加${kind === "file" ? "文件" : kind === "app" ? "App" : "图片"}</div>`;
-    return;
-  }
 
   const source = kind === "image"
     ? androidAttachmentState.images.filter((item) => androidAttachmentState.album === "全部图片" || item.album === androidAttachmentState.album)
@@ -768,13 +713,13 @@ function renderAndroidAttachmentPanel() {
       icon.className = "android-app-icon";
       icon.innerHTML = thumb
         ? `<img src="${thumb}" alt=""><i></i>`
-        : `<span class="android-queue-preview">A</span><i></i>`;
+        : `<span class="android-gallery-placeholder">A</span><i></i>`;
       const name = document.createElement("span");
       name.className = "android-app-name";
       name.textContent = item.label || item.name.replace(/\.apk$/i, "");
       button.append(icon, name);
     } else {
-      button.innerHTML = thumb ? `<img src="${thumb}" alt=""><i></i>` : `<span class="android-queue-preview">▧</span><i></i>`;
+      button.innerHTML = thumb ? `<img src="${thumb}" alt=""><i></i>` : `<span class="android-gallery-placeholder">▧</span><i></i>`;
     }
     const badge = button.querySelector("i");
     const refreshBadge = () => {
@@ -823,21 +768,23 @@ async function openAndroidAttachment(kind, continueAdding = false) {
     androidAttachmentState.targetSession = currentTarget.session;
   }
   androidAttachmentState.kind = kind;
-  androidAttachmentState.mode = kind === "file" ? "queue" : "picker";
+  const tauri = window.__TAURI__;
+  if (kind === "file") {
+    if (!tauri) return;
+    await tauri.core.invoke("open_saf_multi_picker").catch((e) => console.error("[UI] 多文件选择器调用失败:", e));
+    return;
+  }
   setAndroidAttachmentPanel(true);
   renderAndroidAttachmentPanel();
-  const tauri = window.__TAURI__;
   if (!tauri) return;
-  if (kind === "file") {
-    await tauri.core.invoke("open_saf_multi_picker").catch((e) => console.error("[UI] 多文件选择器调用失败:", e));
-  } else if (kind === "image" && (!androidAttachmentState.images.length || !continueAdding)) {
+  if (kind === "image" && (!androidAttachmentState.images.length || !continueAdding)) {
     await tauri.core.invoke("load_android_media_images").catch((e) => console.error("[UI] 相册读取失败:", e));
   } else if (kind === "app" && (!androidAttachmentState.apps.length || !continueAdding)) {
     await tauri.core.invoke("load_android_apps").catch((e) => console.error("[UI] App 列表读取失败:", e));
   }
 }
 
-async function sendAndroidAttachmentQueue() {
+async function sendAndroidSelectedAttachments() {
   const kind = androidAttachmentState.kind;
   const selected = androidAttachmentState.selected[kind];
   if (!selected.size || !androidAttachmentState.targetPeer) return;
@@ -849,26 +796,38 @@ async function sendAndroidAttachmentQueue() {
     showMessageActionToast("聊天对象已切换，请重新选择附件");
     return;
   }
-  androidAttachmentState.mode = "queue";
-  renderAndroidAttachmentPanel();
+  const items = Array.from(selected.values());
+  selected.clear();
+  updateAndroidComposerState();
+  if (document.getElementById("android-attachment-panel")?.classList.contains("open")) {
+    if (location.hash === "#chat-attachment") history.back();
+    else setAndroidAttachmentPanel(false);
+  }
+  await sendAndroidAttachments(items, target);
+}
+
+async function sendAndroidAttachments(items, target) {
+  if (!items.length) return;
+  if (!target || !chatRenderController.isCurrent(target.session)) {
+    showMessageActionToast("聊天对象已切换，请重新选择附件");
+    return;
+  }
   if (document.getElementById("chat-input")?.value.trim()) {
     await sendMessage(target.peer);
   }
-  for (const item of selected.values()) {
-    if (item.status === "sent" || item.status === "pending") continue;
-    item.status = "sending";
-    renderAndroidAttachmentPanel();
+  for (const item of items) {
     try {
-      const result = await apiSendFile(target.peer.id, target.peer.addr, null, item.uri);
-      item.msgId = result?.msg_id || item.msgId;
-      item.status = result?.status === "pending" ? "pending" : "sent";
+      await apiSendFile(target.peer.id, target.peer.addr, null, item.uri);
     } catch (e) {
-      item.status = "error";
-      item.error = e.message;
+      console.error("[UI] 安卓附件发送失败:", item.name, e);
+      showMessageActionToast(`${item.name} 发送失败`, 3000);
     }
-    renderAndroidAttachmentPanel();
+    try {
+      await refreshCapturedChat(target, { forceLatest: true });
+    } catch (e) {
+      console.warn("[UI] 刷新安卓附件消息失败:", e);
+    }
   }
-  await refreshCapturedChat(target, { forceLatest: true });
 }
 
 function showIncomingSystemNotification(message) {
@@ -891,15 +850,16 @@ function initAndroidAttachmentPicker() {
     if (location.hash === "#chat-attachment") history.back();
     else setAndroidAttachmentPanel(false);
   });
-  document.getElementById("android-send-attachments")?.addEventListener("click", sendAndroidAttachmentQueue);
+  document.getElementById("android-send-attachments")?.addEventListener("click", sendAndroidSelectedAttachments);
   document.getElementById("android-continue-add")?.addEventListener("click", () => openAndroidAttachment(androidAttachmentState.kind, true));
 
   window.addEventListener("android-files-selected", (event) => {
-    mergeAndroidAttachments("file", event.detail || []);
-    androidAttachmentState.kind = "file";
-    androidAttachmentState.mode = "queue";
-    setAndroidAttachmentPanel(true);
-    renderAndroidAttachmentPanel();
+    const target = {
+      peer: copyChatPeer(androidAttachmentState.targetPeer),
+      session: androidAttachmentState.targetSession,
+    };
+    const items = (event.detail || []).map((item) => normalizeAndroidAttachment(item, "file"));
+    sendAndroidAttachments(items, target);
   });
   window.addEventListener("android-media-images", (event) => {
     androidAttachmentState.images = event.detail || [];
